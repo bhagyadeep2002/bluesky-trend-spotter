@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import AsyncContextManager, Callable, Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from sqlalchemy.exc import OperationalError
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
-from .config import Settings
 from .checkpoint import Checkpoint
+from .config import Settings
 from .events import POST_COLLECTION, MalformedEvent, parse_event
-from sqlalchemy.exc import OperationalError
 from .metrics import Metrics
 from .storage import RawWriter, raw_fields, replay_messages
 
@@ -53,15 +53,25 @@ def backoff_delay(attempt: int, initial: float, maximum: float, jitter: float) -
 
 
 class Consumer:
-    def __init__(self, settings: Settings, *, metrics: Metrics | None = None,
-                 connector: Connector | None = None, writer: RawWriter | None = None,
-                 random_value: Callable[[], float] = random.random, sink=None):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        metrics: Metrics | None = None,
+        connector: Connector | None = None,
+        writer: RawWriter | None = None,
+        random_value: Callable[[], float] = random.random,
+        sink=None,
+    ):
         self.settings = settings
         self.metrics = metrics if metrics is not None else Metrics()
         self.metrics.queue_capacity = settings.queue_size
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=settings.queue_size)
-        self.writer = writer if writer is not None else RawWriter(
-            settings.raw_dir, settings.raw_max_bytes, settings.raw_rotate_seconds)
+        self.writer = (
+            writer
+            if writer is not None
+            else RawWriter(settings.raw_dir, settings.raw_max_bytes, settings.raw_rotate_seconds)
+        )
         self.connector = connector or self._connect
         self.random_value = random_value
         self.cursor: int | None = None
@@ -70,12 +80,21 @@ class Consumer:
         self.sink = sink
 
     def _connect(self, url: str):
-        return connect(url, max_size=self.settings.max_message_bytes, max_queue=16,
-                       open_timeout=10, close_timeout=5, ping_interval=20, ping_timeout=20,
-                       subprotocols=["xrpc.v1.json"] if "subscribeEvents" in urlsplit(url).path else None)
+        return connect(
+            url,
+            max_size=self.settings.max_message_bytes,
+            max_queue=16,
+            open_timeout=10,
+            close_timeout=5,
+            ping_interval=20,
+            ping_timeout=20,
+            subprotocols=["xrpc.v1.json"] if "subscribeEvents" in urlsplit(url).path else None,
+        )
 
     async def _enqueue(self, raw: str | bytes) -> None:
-        size = len(raw.encode("utf-8", errors="surrogatepass")) if isinstance(raw, str) else len(raw)
+        size = (
+            len(raw.encode("utf-8", errors="surrogatepass")) if isinstance(raw, str) else len(raw)
+        )
         if size > self.settings.max_message_bytes:
             raise ValueError("source message exceeds configured size limit")
         ingested_at = datetime.now(UTC).isoformat()
@@ -99,7 +118,9 @@ class Consumer:
             received_before = self.metrics.events_received
             self.metrics.connection_state = "connecting"
             try:
-                async with self.connector(subscription_url(self.settings.jetstream_url, self.cursor)) as socket:
+                async with self.connector(
+                    subscription_url(self.settings.jetstream_url, self.cursor)
+                ) as socket:
                     self.metrics.connection_state = "connected"
                     log_event("connected")
                     stop_task = asyncio.create_task(stop.wait())
@@ -107,7 +128,9 @@ class Consumer:
                         while not stop.is_set():
                             receive = asyncio.create_task(socket.recv())
                             try:
-                                done, _ = await asyncio.wait({receive, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+                                done, _ = await asyncio.wait(
+                                    {receive, stop_task}, return_when=asyncio.FIRST_COMPLETED
+                                )
                                 # If receive and stop finish together, persist the received message.
                                 if receive in done:
                                     await self._enqueue(receive.result())
@@ -131,8 +154,12 @@ class Consumer:
                 break
             if self.metrics.events_received > received_before:
                 attempt = 0
-            delay = backoff_delay(attempt, self.settings.backoff_initial,
-                                  self.settings.backoff_max, self.random_value())
+            delay = backoff_delay(
+                attempt,
+                self.settings.backoff_initial,
+                self.settings.backoff_max,
+                self.random_value(),
+            )
             attempt += 1
             self.metrics.retries += 1
             self.metrics.connection_state = "backoff"
@@ -155,15 +182,21 @@ class Consumer:
                 except MalformedEvent:
                     disposition = "malformed"
                     log_event("malformed_event")
-                envelope = {"schema_version": 1, "ingested_at": ingested_at,
-                            "disposition": disposition, **raw_fields(raw),
-                            "post": post.to_dict() if post else None}
+                envelope = {
+                    "schema_version": 1,
+                    "ingested_at": ingested_at,
+                    "disposition": disposition,
+                    **raw_fields(raw),
+                    "post": post.to_dict() if post else None,
+                }
                 # One worker owns the writer; disk operations don't block HTTP or receipt.
                 reference = await asyncio.to_thread(self.writer.append, envelope)
                 if post and self.sink:
                     for attempt in range(self.settings.database_retries):
                         try:
-                            changed = await asyncio.to_thread(self.sink, post, ingested_at, reference)
+                            changed = await asyncio.to_thread(
+                                self.sink, post, ingested_at, reference
+                            )
                             self.metrics.events_applied += int(changed)
                             self.metrics.duplicate_or_stale_events += int(not changed)
                             break
@@ -178,14 +211,20 @@ class Consumer:
                 now = datetime.now(UTC)
                 self.metrics.events_persisted += 1
                 self.metrics.last_persisted_at = now.isoformat()
-                self.metrics.processing_lag_seconds = max(0, (now - datetime.fromisoformat(ingested_at)).total_seconds())
+                self.metrics.processing_lag_seconds = max(
+                    0, (now - datetime.fromisoformat(ingested_at)).total_seconds()
+                )
                 if post:
                     self.metrics.valid_post_events += 1
                     if post.source_time:
-                        self.metrics.source_lag_seconds = max(0, (now - datetime.fromisoformat(post.source_time)).total_seconds())
+                        self.metrics.source_lag_seconds = max(
+                            0, (now - datetime.fromisoformat(post.source_time)).total_seconds()
+                        )
                     if post.cursor is not None:
                         if not self.replaying:
-                            await asyncio.to_thread(self.checkpoint.save, max(self.cursor or 0, post.cursor))
+                            await asyncio.to_thread(
+                                self.checkpoint.save, max(self.cursor or 0, post.cursor)
+                            )
                         self.cursor = max(self.cursor or 0, post.cursor)
                 elif disposition == "malformed":
                     self.metrics.malformed_events += 1

@@ -1,5 +1,5 @@
-import json
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import patch
 
@@ -39,13 +39,16 @@ async def test_consumer_restarts_from_persisted_cursor(tmp_path):
     settings = Settings(raw_dir=tmp_path)
     raw = open("tests/fixtures/events.jsonl").readline()
     urls = []
+
     class Socket:
         async def recv(self):
             return raw
+
     @asynccontextmanager
     async def connector(url):
         urls.append(url)
         yield Socket()
+
     await Consumer(settings, connector=connector).run(asyncio.Event(), limit=1)
     await Consumer(settings, connector=connector).run(asyncio.Event(), limit=1)
     assert "cursor=1725911162329308" in urls[1]

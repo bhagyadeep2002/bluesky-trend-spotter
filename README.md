@@ -204,3 +204,20 @@ The current reproducible development dependency lock is `uv.lock`:
 uv sync --locked
 uv run pytest -q
 ```
+
+## Detection stage
+
+Candidates are hashtags, URL hostnames, and conservative terms, capped at 12 per
+post with common stop words removed. Updates replace assignments and deletes
+remove them. The detector recomputes current-state counts across a bounded
+window horizon and scores completed windows. Default baseline: 12 prior windows
+of five minutes, including zero-count windows. Smoothing alpha=2, baseline
+floor=1; gates require at least 10 current posts, an absolute increase of 5 and
+a smoothed rate ratio of 2. Score = absolute increase × log2(rate ratio), or zero
+when a gate fails. Consecutive eligible windows distinguish sustained activity.
+All components and detection runs are persisted for inspection.
+
+A topic starting from absent history can be detected after enough absolute
+volume; the model cannot establish network-wide coverage or truth/importance.
+Only completed windows are scored; boundary wait can be five minutes. The next
+stage exposes these data through the topic API.

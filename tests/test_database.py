@@ -44,12 +44,14 @@ def test_delete_before_older_create_keeps_tombstone(database):
 
 async def test_database_retry_and_replay_do_not_inflate_counts(database, tmp_path):
     calls = 0
+
     def flaky_sink(*args):
         nonlocal calls
         calls += 1
         if calls == 1:
             raise OperationalError("synthetic unavailable", {}, Exception())
         return database.apply(*args)
+
     settings = Settings(raw_dir=tmp_path / "raw", database_retry_seconds=0.001)
     first = Consumer(settings, sink=flaky_sink)
     await first.run(asyncio.Event(), replay=FIXTURE)
@@ -65,8 +67,11 @@ async def test_database_retry_and_replay_do_not_inflate_counts(database, tmp_pat
 async def test_exhausted_database_retries_leave_raw_for_recovery(tmp_path):
     def unavailable(*args):
         raise OperationalError("synthetic unavailable", {}, Exception())
-    consumer = Consumer(Settings(raw_dir=tmp_path, database_retries=2,
-                                 database_retry_seconds=0.001), sink=unavailable)
+
+    consumer = Consumer(
+        Settings(raw_dir=tmp_path, database_retries=2, database_retry_seconds=0.001),
+        sink=unavailable,
+    )
     with pytest.raises(OperationalError):
         await consumer.run(asyncio.Event(), replay=FIXTURE)
     assert consumer.cursor is None

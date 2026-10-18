@@ -13,8 +13,13 @@ from uuid import uuid4
 class RawWriter:
     """Single-writer append log. Acknowledges only after flush + fsync."""
 
-    def __init__(self, directory: Path, max_bytes: int, rotate_seconds: float,
-                 clock: Callable[[], float] = time.monotonic):
+    def __init__(
+        self,
+        directory: Path,
+        max_bytes: int,
+        rotate_seconds: float,
+        clock: Callable[[], float] = time.monotonic,
+    ):
         self.directory = directory
         self.max_bytes = max_bytes
         self.rotate_seconds = rotate_seconds
@@ -26,7 +31,11 @@ class RawWriter:
     def append(self, envelope: dict) -> str:
         line = (json.dumps(envelope, ensure_ascii=True, separators=(",", ":")) + "\n").encode()
         now = self.clock()
-        if self.file is None or self.size + len(line) > self.max_bytes or now - self.opened_at >= self.rotate_seconds:
+        if (
+            self.file is None
+            or self.size + len(line) > self.max_bytes
+            or now - self.opened_at >= self.rotate_seconds
+        ):
             self.close()
             self.directory.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -68,11 +77,15 @@ def replay_messages(path: Path, max_bytes: int):
                 continue
             try:
                 value = json.loads(line)
-            except (ValueError, UnicodeError, RecursionError):
+            except ValueError, UnicodeError, RecursionError:
                 yield line.rstrip(b"\r\n")
                 continue
             if isinstance(value, dict) and value.get("schema_version") == 1:
                 raw = value["raw"]
-                yield base64.b64decode(raw, validate=True) if value["raw_encoding"] == "base64" else raw
+                yield (
+                    base64.b64decode(raw, validate=True)
+                    if value["raw_encoding"] == "base64"
+                    else raw
+                )
             else:
                 yield line.rstrip(b"\r\n")

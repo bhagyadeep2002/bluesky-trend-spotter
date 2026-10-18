@@ -15,8 +15,11 @@ testing each stage before advancing. Preserve the original printing demo.
 3. PostgreSQL storage: complete. Eight migrated tables, unique event keys,
    source-ordered current-state writes, cleared deletion text and tombstones,
    bounded database retries. Raw fsync and database transaction precede checkpoints.
-4. Next: candidate extraction, five-minute aggregates and transparent spike scores.
-5. Then API, server-rendered
+4. Detection: complete. Deterministic hashtag/domain/term candidates (up to 12
+   per post), stop-word filtering, configurable minimum frequency, zero-filled
+   five-minute windows, 12 prior-window baseline, smoothed ratio, absolute/volume
+   gates, transparent scores, consecutive-window persistence and run records.
+5. Next: topic/search/health API, then server-rendered
    dashboard, Compose, failure tests, real benchmarks, final documentation.
 
 ## Architecture and commands
@@ -58,7 +61,7 @@ other database clusters. Compose reproducibility will be added later.
 
 DATABASE_URL enables normalized database writes in the ingestion CLI; unset
 means raw-only capture. Apply migrations with DATABASE_URL=... uv run alembic
-upgrade head. No detector/dashboard/API for topics yet. SQLite is a local test
+upgrade head. No dashboard/API for topics yet. SQLite is a local test
 and offline demo adapter; PostgreSQL is the normal deployment database. No retention/redaction
 policy yet; raw logs can retain subsequently deleted text and rotation does not
 cap total disk growth. No performance/continuous capture guarantees claimed.
@@ -68,3 +71,11 @@ Latest validation: 43 tests passed (including actual PostgreSQL schema isolation
 idempotency, out-of-order deletion protection, transient DB failure and raw
 recovery). PostgreSQL Alembic upgrade and check passed with no schema drift.
 Run integration tests with TEST_DATABASE_URL=postgresql+psycopg://bluesky@127.0.0.1:55432/bluesky_test uv run pytest -q.
+
+Detection validation: synthetic #aurora rose from 4 to 24 posts/window and ranked
+above stable #steady at 40/window; tiny two-post noise was excluded. Repeated
+detection and duplicate replay keep counts stable; deletes remove assignments
+and current scores. Tests passed on SQLite and PostgreSQL; Ruff checks pass.
+Windows score the latest completed interval; maximum expected boundary wait is
+five minutes plus detector interval. Missing history is represented by zeros,
+so baseline warmup and incomplete coverage remain documented limitations.

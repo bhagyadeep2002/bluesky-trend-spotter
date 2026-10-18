@@ -1,7 +1,20 @@
 """Small portable schema; PostgreSQL is the normal deployment target."""
+
 from datetime import datetime
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -50,15 +63,21 @@ class Topic(Base):
 
 class TopicTerm(Base):
     __tablename__ = "topic_terms"
-    topic_id: Mapped[int] = mapped_column(ForeignKey("topic_candidates.id", ondelete="CASCADE"), primary_key=True)
+    topic_id: Mapped[int] = mapped_column(
+        ForeignKey("topic_candidates.id", ondelete="CASCADE"), primary_key=True
+    )
     term: Mapped[str] = mapped_column(Text, primary_key=True)
     weight: Mapped[float] = mapped_column(Float, default=1)
 
 
 class Assignment(Base):
     __tablename__ = "topic_post_assignments"
-    topic_id: Mapped[int] = mapped_column(ForeignKey("topic_candidates.id", ondelete="CASCADE"), primary_key=True)
-    post_uri: Mapped[str] = mapped_column(ForeignKey("posts.uri", ondelete="CASCADE"), primary_key=True)
+    topic_id: Mapped[int] = mapped_column(
+        ForeignKey("topic_candidates.id", ondelete="CASCADE"), primary_key=True
+    )
+    post_uri: Mapped[str] = mapped_column(
+        ForeignKey("posts.uri", ondelete="CASCADE"), primary_key=True
+    )
     assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     relevance_score: Mapped[float] = mapped_column(Float, default=1)
     __table_args__ = (Index("ix_assignment_post", "post_uri"),)
@@ -78,8 +97,10 @@ class WindowMetric(Base):
     score_components: Mapped[dict] = mapped_column(JSON)
     explanation: Mapped[str] = mapped_column(Text)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    __table_args__ = (UniqueConstraint("topic_id", "window_start", "window_minutes"),
-                      Index("ix_topic_window_lookup", "window_start", "window_minutes", "spike_score"))
+    __table_args__ = (
+        UniqueConstraint("topic_id", "window_start", "window_minutes"),
+        Index("ix_topic_window_lookup", "window_start", "window_minutes", "spike_score"),
+    )
 
 
 class DetectionRun(Base):

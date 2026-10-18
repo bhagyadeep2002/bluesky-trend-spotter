@@ -6,7 +6,11 @@ from sqlalchemy import create_engine, pool
 from bluesky_ingest.models import Base
 
 config = context.config
-url = config.attributes.get("database_url") or os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+url = (
+    config.attributes.get("database_url")
+    or os.environ.get("DATABASE_URL")
+    or config.get_main_option("sqlalchemy.url")
+)
 
 if context.is_offline_mode():
     context.configure(url=url, target_metadata=Base.metadata, literal_binds=True)

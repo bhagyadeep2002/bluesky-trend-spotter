@@ -9,7 +9,9 @@ from urllib.parse import urlsplit
 
 @dataclass(frozen=True)
 class Settings:
-    jetstream_url: str = "wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents"
+    jetstream_url: str = (
+        "wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents"
+    )
     raw_dir: Path = Path("data/raw")
     queue_size: int = 256
     max_message_bytes: int = 1_048_576
@@ -22,13 +24,42 @@ class Settings:
     database_url: str = ""
     database_retries: int = 5
     database_retry_seconds: float = 1
+    window_minutes: int = 5
+    baseline_windows: int = 12
+    alpha: float = 2
+    baseline_floor: float = 1
+    min_current_count: int = 10
+    min_absolute_increase: float = 5
+    min_rate_ratio: float = 2
+    candidate_min_frequency: int = 3
+    detect_interval_seconds: float = 15
+    analysis_max_posts: int = 100_000
 
     def __post_init__(self) -> None:
         url = urlsplit(self.jetstream_url)
         if url.scheme not in {"ws", "wss"} or not url.hostname or url.username or url.password:
             raise ValueError("JETSTREAM_URL must be a ws/wss URL without credentials")
-        for name in ("queue_size", "max_message_bytes", "raw_max_bytes", "raw_rotate_seconds",
-                     "backoff_initial", "backoff_max", "metrics_port", "database_retries", "database_retry_seconds"):
+        for name in (
+            "queue_size",
+            "max_message_bytes",
+            "raw_max_bytes",
+            "raw_rotate_seconds",
+            "backoff_initial",
+            "backoff_max",
+            "metrics_port",
+            "database_retries",
+            "database_retry_seconds",
+            "window_minutes",
+            "baseline_windows",
+            "alpha",
+            "baseline_floor",
+            "min_current_count",
+            "min_absolute_increase",
+            "min_rate_ratio",
+            "candidate_min_frequency",
+            "detect_interval_seconds",
+            "analysis_max_posts",
+        ):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")

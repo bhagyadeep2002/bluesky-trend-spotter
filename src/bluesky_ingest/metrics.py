@@ -32,9 +32,11 @@ class Metrics:
     def snapshot(self) -> dict:
         result = asdict(self)
         elapsed = max(time.monotonic() - result.pop("started"), 0.001)
-        result.update(uptime_seconds=elapsed,
-                      events_per_second=self.events_received / elapsed,
-                      persisted_per_second=self.events_persisted / elapsed)
+        result.update(
+            uptime_seconds=elapsed,
+            events_per_second=self.events_received / elapsed,
+            persisted_per_second=self.events_persisted / elapsed,
+        )
         return result
 
 
@@ -44,7 +46,9 @@ def create_app(metrics: Metrics) -> FastAPI:
     @app.get("/healthz")
     async def health():
         failed = metrics.connection_state == "failed"
-        return JSONResponse({"status": "failed" if failed else "ok"}, status_code=503 if failed else 200)
+        return JSONResponse(
+            {"status": "failed" if failed else "ok"}, status_code=503 if failed else 200
+        )
 
     @app.get("/api/v1/pipeline/status")
     async def status():

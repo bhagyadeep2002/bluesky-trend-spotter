@@ -37,8 +37,15 @@ async def launch(settings: Settings, replay: Path | None, limit: int, serve_metr
     metrics = Metrics()
     database = Database(settings.database_url) if settings.database_url else None
     consumer = Consumer(settings, metrics=metrics, sink=database.apply if database else None)
-    server = MetricsServer(uvicorn.Config(create_app(metrics), host=settings.metrics_host,
-                                         port=settings.metrics_port, log_config=None, access_log=False))
+    server = MetricsServer(
+        uvicorn.Config(
+            create_app(metrics),
+            host=settings.metrics_host,
+            port=settings.metrics_port,
+            log_config=None,
+            access_log=False,
+        )
+    )
     ingest_task = asyncio.create_task(consumer.run(stop, replay=replay, limit=limit))
     server_task = asyncio.create_task(server.serve()) if serve_metrics else None
     failure: str | None = None
@@ -56,7 +63,9 @@ async def launch(settings: Settings, replay: Path | None, limit: int, serve_metr
     finally:
         stop.set()
         server.should_exit = True
-        await asyncio.gather(ingest_task, *([server_task] if server_task else []), return_exceptions=True)
+        await asyncio.gather(
+            ingest_task, *([server_task] if server_task else []), return_exceptions=True
+        )
         if failure and metrics.connection_state != "failed":
             metrics.connection_state = "failed"
             metrics.errors += 1
@@ -70,10 +79,18 @@ async def launch(settings: Settings, replay: Path | None, limit: int, serve_metr
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Persist and validate public Jetstream post events")
-    parser.add_argument("--replay", type=Path, help="replay source JSONL or a saved raw event file offline")
-    parser.add_argument("--limit", type=int, default=0, help="stop after N messages; 0 means unlimited")
-    parser.add_argument("--no-metrics", action="store_true", help="disable the local HTTP metrics server")
+    parser = argparse.ArgumentParser(
+        description="Persist and validate public Jetstream post events"
+    )
+    parser.add_argument(
+        "--replay", type=Path, help="replay source JSONL or a saved raw event file offline"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=0, help="stop after N messages; 0 means unlimited"
+    )
+    parser.add_argument(
+        "--no-metrics", action="store_true", help="disable the local HTTP metrics server"
+    )
     args = parser.parse_args()
     if args.limit < 0:
         parser.error("--limit must be nonnegative")
@@ -87,7 +104,7 @@ def main() -> None:
     logging.getLogger("websockets").setLevel(logging.CRITICAL)
     try:
         asyncio.run(launch(settings, args.replay, args.limit, not args.no_metrics))
-    except (OSError, ValueError, RuntimeError):
+    except OSError, ValueError, RuntimeError:
         raise SystemExit(1) from None
 
 

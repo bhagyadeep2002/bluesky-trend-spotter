@@ -76,14 +76,24 @@ def parse_event(raw: str | bytes) -> PostEvent | None:
         commit = body.get("commit")
     if not isinstance(commit, dict):
         raise MalformedEvent("missing commit")
-    if not isinstance(commit.get("collection"), str) or not isinstance(commit.get("operation"), str):
+    if not isinstance(commit.get("collection"), str) or not isinstance(
+        commit.get("operation"), str
+    ):
         raise MalformedEvent("missing collection or operation")
-    if commit["collection"] != POST_COLLECTION or commit["operation"] not in {"create", "update", "delete"}:
+    if commit["collection"] != POST_COLLECTION or commit["operation"] not in {
+        "create",
+        "update",
+        "delete",
+    }:
         return None
     did, rkey = body.get("did"), commit.get("rkey")
     if not isinstance(did, str) or not re.fullmatch(r"did:[a-z0-9]+:[A-Za-z0-9._:%-]+", did):
         raise MalformedEvent("invalid repository DID")
-    if not isinstance(rkey, str) or not re.fullmatch(r"[A-Za-z0-9._~:-]{1,512}", rkey) or rkey in {".", ".."}:
+    if (
+        not isinstance(rkey, str)
+        or not re.fullmatch(r"[A-Za-z0-9._~:-]{1,512}", rkey)
+        or rkey in {".", ".."}
+    ):
         raise MalformedEvent("invalid record key")
     cursor = body.get("seq" if v2 else "time_us")
     if cursor is not None and (type(cursor) is not int or cursor < 0):
@@ -109,9 +119,19 @@ def parse_event(raw: str | bytes) -> PostEvent | None:
         if not isinstance(languages, list) or any(not isinstance(lang, str) for lang in languages):
             raise MalformedEvent("invalid languages")
     # Canonical source event digest: stable on duplicate delivery, no retained text in key.
-    digest = hashlib.sha256(json.dumps(event, sort_keys=True, ensure_ascii=True,
-                                       separators=(",", ":")).encode()).hexdigest()
-    return PostEvent(digest, f"at://{did}/{POST_COLLECTION}/{rkey}", did, rkey,
-                     commit["operation"], source_time, cursor, text,
-                     " ".join(unicodedata.normalize("NFC", text).split()) if text is not None else None,
-                     created_at, languages)
+    digest = hashlib.sha256(
+        json.dumps(event, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return PostEvent(
+        digest,
+        f"at://{did}/{POST_COLLECTION}/{rkey}",
+        did,
+        rkey,
+        commit["operation"],
+        source_time,
+        cursor,
+        text,
+        " ".join(unicodedata.normalize("NFC", text).split()) if text is not None else None,
+        created_at,
+        languages,
+    )
