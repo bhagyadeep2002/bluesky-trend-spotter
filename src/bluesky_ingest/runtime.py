@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import multiprocessing
 import tempfile
 import time
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -17,8 +20,8 @@ from sqlalchemy.orm import Session
 from .api import create_app
 from .config import Settings
 from .database import Database
-from .detection import detect, floor_window
-from .maintenance import RetainedSink, maintain
+from .detection import detect_in_worker, floor_window
+from .maintenance import maintain
 from .metrics import Metrics
 from .models import Assignment, DetectionRun, Post, PostEventRecord, Topic, TopicTerm, WindowMetric
 from .service import Consumer, log_event
@@ -54,6 +57,10 @@ async def seed_demo(database: Database, settings: Settings, metrics: Metrics) ->
     metrics.connection_state = "demo"
 
 
+def detection_worker() -> ProcessPoolExecutor:
+    return ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+
+
 def application(settings: Settings, *, demo: bool = False, stream: bool = True):
     if not settings.database_url:
         raise ValueError("Set DATABASE_URL for live mode or use --demo")
@@ -76,7 +83,13 @@ def application(settings: Settings, *, demo: bool = False, stream: bool = True):
         elif not stream:
             metrics.connection_state = "idle"
 
+        # Spawn gives the worker its own Python interpreter and database engines.
+        # CPU-heavy snapshots/scoring cannot hold the ingestion interpreter's GIL.
+        worker = detection_worker()
+        database_url = database.engine.url.render_as_string(hide_password=False)
+
         async def detector():
+            nonlocal worker
             demo_boundary = floor_window(datetime.now(UTC), settings.window_minutes)
             last_maintenance = -60.0
             while not stop.is_set():
@@ -88,13 +101,20 @@ def application(settings: Settings, *, demo: bool = False, stream: bool = True):
                     if demo and boundary != demo_boundary:
                         await seed_demo(database, settings, metrics)
                         demo_boundary = boundary
-                    metrics.topics_evaluated = await asyncio.to_thread(detect, database, settings)
+                    detection_started = time.monotonic()
+                    metrics.topics_evaluated = await asyncio.get_running_loop().run_in_executor(
+                        worker, detect_in_worker, database_url, settings
+                    )
+                    metrics.last_detection_duration_seconds = time.monotonic() - detection_started
                     metrics.last_detection_at = datetime.now(UTC).isoformat()
                     metrics.detection_error = None
                 except Exception as exc:
                     metrics.errors += 1
                     metrics.detection_error = type(exc).__name__
                     log_event("detection_failed", error_type=type(exc).__name__)
+                    if isinstance(exc, BrokenProcessPool):
+                        await asyncio.to_thread(worker.shutdown, wait=True)
+                        worker = detection_worker()
                 with suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), settings.detect_interval_seconds)
 
@@ -102,7 +122,7 @@ def application(settings: Settings, *, demo: bool = False, stream: bool = True):
         ingest_task = None
         if stream and not demo:
             ingest_task = asyncio.create_task(
-                Consumer(settings, metrics=metrics, sink=RetainedSink(database, settings)).run(stop)
+                Consumer(settings, metrics=metrics, sink=database.apply).run(stop)
             )
 
             def ingestion_done(task):
@@ -121,6 +141,7 @@ def application(settings: Settings, *, demo: bool = False, stream: bool = True):
             await asyncio.gather(
                 detection_task, *([ingest_task] if ingest_task else []), return_exceptions=True
             )
+            await asyncio.to_thread(worker.shutdown, wait=True)
             log_event("application_stopped", **metrics.snapshot())
             database.dispose()
 

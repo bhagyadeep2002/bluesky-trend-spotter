@@ -105,3 +105,37 @@ def test_update_reassigns_terms_without_creating_extra_activity(database):
         keys = list(session.scalars(select(Topic.normalized_key).join(Assignment)))
         assert keys == ["hashtag:replacement"]
         assert session.scalar(select(func.count()).select_from(Post)) == 1
+
+
+def test_batched_candidates_keep_keys_weights_and_rollback_atomically(database):
+    from sqlalchemy import event
+
+    from bluesky_ingest.candidates import extract_candidates
+    from bluesky_ingest.models import TopicTerm
+
+    now = datetime.now(UTC)
+    text = "#zeta #alpha #alpha https://science.example/ earthquake"
+    post = parse_event(make_event(text, now, "batch"))
+
+    def fail_assignment(connection, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO topic_post_assignments"):
+            raise OperationalError("synthetic assignment failure", {}, Exception())
+
+    event.listen(database.engine, "before_cursor_execute", fail_assignment)
+    try:
+        with pytest.raises(OperationalError):
+            database.apply(post, now.isoformat())
+    finally:
+        event.remove(database.engine, "before_cursor_execute", fail_assignment)
+    with Session(database.engine) as session:
+        for model in [Post, PostEventRecord, Topic, TopicTerm, Assignment]:
+            assert session.scalar(select(func.count()).select_from(model)) == 0
+    assert database.apply(post, now.isoformat())
+    assert not database.apply(post, now.isoformat())
+    with Session(database.engine) as session:
+        actual = dict(
+            session.execute(
+                select(Topic.normalized_key, Assignment.relevance_score).join(Assignment)
+            ).all()
+        )
+        assert actual == {candidate.key: candidate.weight for candidate in extract_candidates(text)}

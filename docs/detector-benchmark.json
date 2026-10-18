@@ -1,0 +1,43 @@
+{
+  "measured_at": "2026-10-18T17:26:03.649973+00:00",
+  "posts": 200000,
+  "candidate_topics": 25000,
+  "assignments": 800000,
+  "baseline_revision": "980783c",
+  "stages": {
+    "baseline": {
+      "seconds": 43.69452266600092,
+      "topics_evaluated": 25001,
+      "probe_writes": 16,
+      "probe_target_per_second": 40,
+      "probe_latency_p95_seconds": 43.59863262500039,
+      "probe_latency_max_seconds": 43.59863262500039
+    },
+    "optimized_bootstrap": {
+      "seconds": 25.95955850000064,
+      "topics_evaluated": 25001,
+      "probe_writes": 853,
+      "probe_target_per_second": 40,
+      "probe_latency_p95_seconds": 0.02409083400016243,
+      "probe_latency_max_seconds": 0.37563308300013887
+    },
+    "optimized_steady": {
+      "seconds": 6.866788208999424,
+      "topics_evaluated": 25001,
+      "probe_writes": 230,
+      "probe_target_per_second": 40,
+      "probe_latency_p95_seconds": 0.01114962500105321,
+      "probe_latency_max_seconds": 0.02259937500093656
+    },
+    "optimized_next_window": {
+      "seconds": 13.905414041999393,
+      "topics_evaluated": 25001,
+      "probe_writes": 442,
+      "probe_target_per_second": 40,
+      "probe_latency_p95_seconds": 0.02814579100049741,
+      "probe_latency_max_seconds": 0.1981810420002148
+    }
+  },
+  "limitations": "Generated PostgreSQL fixture, four assignments/post, one process per detector and a 40/sec writer probe; not full live ingestion, raw/checkpoint fsync or six-hour soak. The concurrent probe changes one candidate, so steady-state is nearly unchanged. Snapshot scores converge on a later run for concurrent events. Baseline and optimized stages share data; probe posts accumulate. Wall times include detector work, not worker startup.",
+  "implementation_stage": "Intermediate optimization with bounded advisory-lock publication; final implementation also removes that advisory lock from metric publication/pruning. Final large rerun was interrupted during severe host contention; these figures are retained as staged measurements, not final lock-refinement timings."
+}

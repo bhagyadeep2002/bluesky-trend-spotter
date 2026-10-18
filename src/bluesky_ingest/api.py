@@ -155,6 +155,7 @@ def create_app(
             "queue_capacity": "gauge",
             "processing_lag_seconds": "gauge",
             "source_lag_seconds": "gauge",
+            "last_detection_duration_seconds": "gauge",
             "latency_p50_seconds": "gauge",
             "latency_p95_seconds": "gauge",
         }

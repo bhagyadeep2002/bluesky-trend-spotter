@@ -28,6 +28,7 @@ class Metrics:
     processing_lag_seconds: float | None = None
     last_error: str | None = None
     last_detection_at: str | None = None
+    last_detection_duration_seconds: float | None = None
     detection_error: str | None = None
     topics_evaluated: int = 0
     processing_latencies: list[float] = field(default_factory=list, repr=False)

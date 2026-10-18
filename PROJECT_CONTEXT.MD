@@ -9,6 +9,9 @@ The user authorized completing the full MVP in bluesky_early_warning_codex_brief
 testing each stage before advancing. **All functional MVP stages are complete.** The follow-up adds rolling six-hour
 retention, stronger filler-word filtering and startup baseline gating. The updated
 live Compose app remains on port 8001; the separate demo remains on port 8000.
+The detector/ingestion lag fix is implemented, tested and deployed on port 8001.
+Existing DB/raw/checkpoint volumes are preserved. Source backlog remains; a longer
+recovery/soak check on a less-contended host is the next operational task.
 Final setup, limitations, commands and acceptance evidence are in README.md and
 its linked documents. No remote deployment or repository push was requested.
 
@@ -33,14 +36,26 @@ No Kafka, embedding service, cloud infrastructure or frontend build is needed.
   protect against stale resurrection; deletes clear current text/assignments.
   Revision 0003 adds a monotonic retention cutoff so expired replay stays rejected
   after old deduplication keys and tombstones are pruned.
-- candidates.py/detection.py: capped deterministic hashtags/domains/terms, stop
-  words, zero-filled completed windows, smoothed ratio, absolute/volume gates,
-  reproducible score components, consecutive-window persistence, run records.
+- candidates.py/detection.py: deterministic candidates and unchanged score formula.
+  Counts are grouped in SQL under a read snapshot (PostgreSQL REPEATABLE READ,
+  SQLite explicit read transaction/WAL), without the ingestion advisory lock.
+  Versioned input signatures in metric JSON skip unchanged topics/windows.
+  Bulk upserts publish at most 32 topics per transaction, 200 rows per
+  executemany batch; obsolete timeline rows are deleted in batches of 1,000.
+  Final PostgreSQL publication uses FOR KEY SHARE for topic references, conditional
+  active-flag updates, and no ingestion advisory lock. Pruning also omits that lock.
+  Existing metrics bootstrap signatures automatically; no schema revision change.
+- database.py now batches candidate ID upserts, terms and assignments per post,
+  preserving one atomic current-state transaction and matching IDs by candidate key.
 - api.py/schemas.py: response models, input validation, pagination, sanitized DB
   errors, no-store responses, topic/evidence/search routes, health/readiness and
   Prometheus text metrics. Deleted posts never enter new evidence/search results.
 - runtime.py/static/: combined app lifecycle, detector/maintenance tasks and local
-  responsive HTML/CSS/JS dashboard. Updates every 15s and when a tab regains focus.
+  responsive HTML/CSS/JS dashboard. A persistent, spawned single-worker process runs
+  detection with its own DB engines, separate from ingestion's Python interpreter.
+  Broken workers are replaced; shutdown awaits outstanding work. Pipeline status
+  and Prometheus expose last_detection_duration_seconds. Updates every 15s and
+  when a tab regains focus.
   Demo always uses separate data/demo.db and synthetic data with visible labels.
 - migrations/: revision 0001 initial schema; 0002 PostgreSQL 64-bit generated
   identifiers AND sequences (SQLite INTEGER rowids already support 64 bits);
@@ -52,8 +67,11 @@ No Kafka, embedding service, cloud infrastructure or frontend build is needed.
 Scoring defaults: five-minute latest completed window, 12 baseline windows,
 alpha=2, floor=1, current>=10, increase>=5, ratio>=2; score=increase*log2(ratio)
 when eligible. Candidate minimum horizon frequency=3, at most 12 terms/post.
-Detector runs every 15 seconds and rejects horizons above 100,000 posts. Typical
-timeline contains the latest 13 recomputed windows; baseline counts are stored
+Detector checks every 15 seconds after the previous run and rejects horizons above
+1,000,000 posts by default (ANALYSIS_MAX_POSTS, also passed through Compose). This
+ceiling is a guardrail, not a tested capacity promise; the generated load benchmark
+used 200,000 posts, 800,000 assignments and 25,000 candidates. The timeline retains
+the latest 13 windows; only changed metric inputs are republished. Baseline counts and versioned cache signatures are stored
 in each metric. Rankings are withheld until the earliest observed source window
 precedes the current window by 12 baseline windows (roughly one hour of startup
 warmup). API exposes baseline_ready, baseline_minutes_required and retention_hours;
@@ -154,12 +172,10 @@ volume and detector budgets require measurement. A failed disk/forced crash may
 leave a partial raw tail or lose unpersisted messages. No exactly-once capture,
 multi-process coordination, auth, multi-node availability or production SLO claimed.
 
-Next task: address measured live detector/ingestion contention before longer soak
-tests. Reduce full-horizon metric rewrites, shorten writer-lock duration and move
-CPU-heavy detection out of the ingestion process where appropriate; validate
-concurrent updates/deletes and sustained backlog recovery before claiming gains.
-Then broaden labeled quality evaluation and tune measured retention/horizon budgets.
-MVP functionality is complete; live performance needs this follow-up.
+Next task: observe backlog recovery and a longer soak on a less-contended host,
+then broaden labeled quality evaluation. Source lag is not yet resolved. Do not
+infer sustained full-network capacity or a six-hour retention soak from these
+short fixtures and snapshots.
 
 ## Workspace/session state
 
@@ -168,7 +184,7 @@ milestone1.bundle and /private/tmp Git fallbacks are historical; normal Git writ
 now work. No credentials, local environments, captures, node_modules or caches
 are committed.
 
-The offline demo was restarted with revision 0003 on 127.0.0.1:8000 (PID 11226).
+The offline demo was restarted with the lag fix on 127.0.0.1:8000 (PID 14421).
 The user's existing bluesky-firehose Compose stack was found on app port 8001 and
 PostgreSQL port 5433, rebuilt with `APP_PORT=8001 POSTGRES_PORT=5433 docker compose
 up --build --no-deps -d app`. Existing DB/container volumes were preserved. Migration
@@ -225,3 +241,86 @@ lock too, but this sample directly observed a detector blockage. The existing sh
 fix or new performance guarantee was made during this diagnostic question. Project
 context was updated and committed; no tests were needed for this documentation-only
 change. The live DB, app and volumes were preserved.
+
+## Lag fix implementation and staged validation (2026-10-18)
+
+User authorized implementing the diagnosis. No DB reset or checkpoint skip is used.
+Detector reads/computation no longer hold the writer lock for a whole run. A run
+publishes changed topic batches from its snapshot; concurrent updates/deletes are
+observed by the next run and cannot be lost by clearing a dirty flag. Publication
+is atomic per batch, not across the entire ranking. Failed partial publication can
+be retried idempotently. Evidence/search remain immediately filtered for deletes.
+The integrated app uses its existing minute maintenance rather than duplicate
+RetainedSink maintenance on the ingestion path; standalone ingestion retains its
+receipt/idle cleanup. Schema head stays 0003.
+
+A generated PostgreSQL benchmark compares old detector commit 980783c with this
+intermediate bounded-advisory-lock implementation, running each detector in a
+separate process and a concurrent writer
+targeting 40 events/sec. On 200,000 posts/800,000 assignments/25,000 candidates:
+old detection 43.695s, max writer wait 43.599s; optimized bootstrap 25.960s/max0.376s;
+repeat (nearly unchanged) 6.867s/max0.0226s; next window 13.905s/max0.198s. See
+`tools/benchmark_detector.py`, `docs/detector-benchmark.json` and docs/BENCHMARKS.md.
+This fixture excludes raw/checkpoint fsync and is not a network capacity claim.
+Native tests/benchmarks share a database-wide advisory lock despite isolated schemas;
+run the long baseline benchmark separately from timing-sensitive tests.
+
+The initial detector-only build was deployed on port 8001 with preserved volumes.
+Its first live signature rebuild took ~45s; later sampled runs took 8–22s while
+backdated catch-up events changed completed windows. The queue remained full during
+this rollout, and source lag stayed near 16 minutes. This prompted a separate
+writer batching stage. The pre/post point samples are in docs/lag-validation.json;
+restart resets counters. The final batched writer was deployed as a second rollout. Existing DB and raw
+volumes and the inclusive checkpoint were preserved across both app restarts.
+Historical original benchmark figures above are not substituted for current results.
+
+Full regression before the final lock refinement: **104 passed plus 32 original
+subtests**, PostgreSQL enabled, in 39.92 seconds. Final lock refinement passed
+**45 targeted SQLite/PostgreSQL tests** in 140.47 seconds, including publication and
+pruning while another transaction owns the ingestion advisory lock. Final default
+offline run: **76 passed, 30 skipped, 32 subtests**, in 51.19 seconds. New coverage includes unchanged/open-window cache skips, boundary
+advance, late data and configuration invalidation, nonblocking consistent reads,
+concurrent updates/deletes during a snapshot, retry after partial publication,
+replacement of a broken worker and rollback/key-weight matching for batched writes.
+Ruff, lock/dependency checks, Compose config and whitespace checks pass. Chromium
+UI checks passed again against the updated demo (navigation, refresh, evidence,
+search, errors, warmup, retention label, XSS text handling and desktop/mobile fit).
+The native PostgreSQL test cluster was stopped after checks; the user's Docker DB
+and both app/demo servers remain running.
+
+A sequential before/after ingestion benchmark used the same local real-WebSocket
+fixture, raw/checkpoint fsync and current detector/migrations, loading old writer
+285b56f via the new --database-revision option. Old writer: 118.0 deliveries/sec,
+p95 670ms, CPU4.622s; batched writer: 191.5/sec, p95 384ms, CPU2.825s. Both persisted
+654 deliveries/594 unique events with one forced reconnect and the expected spike
+ranking. See docs/ingestion-before-batching.json and ingestion-after-batching.json.
+These are short fixtures, not a sustained live throughput forecast.
+
+
+### Final rollout and remaining performance limits
+
+The two staged rollouts (detector process/cache and batched ingestion) were followed
+by a final refinement removing ingestion's advisory lock from metric publication
+and pruning. PostgreSQL FOR KEY SHARE protects live topic references against
+retention deletion; ingestion's non-key updates remain compatible. Active flags
+are only updated when they actually differ. The final live app was rebuilt and
+restarted without removing its DB/raw/checkpoint volumes; schema stays at 0003.
+Latest health/readiness returned 200 and ingestion remained connected, with no
+detector error. One final point sample showed 5,196 persisted events, 2.692s local
+processing lag, 962.096s source lag and 71.971s detection duration. This is not a
+claim that live backlog cleared or full-network sustained capacity is achieved.
+
+The final large benchmark rerun was interrupted during severe host contention:
+load averages 143.51/113.46/56.74, ~4.86GiB swap used, physical memory 8GiB. It had
+not produced a replacement result file. Its owned temporary schema
+(detector_bench_c861f52a00b9471bab3cb4b9295c6a7e) was removed and the native cluster
+stopped. No user's Docker DB or other workloads were stopped. The retained 200k
+benchmark JSON/table explicitly describe the intermediate implementation; final
+lock behavior is validated by the targeted concurrency test. Host contention is
+an observed limitation, not proof it explains every remaining live bottleneck.
+
+All final lint/format, dependency/lock, Compose config and whitespace checks pass.
+The demo browser checks passed before the final backend-only lock refinement.
+The aggregate staged live samples are in docs/lag-validation.json. The code task is
+complete; further sustained performance/recovery validation remains an operational
+follow-up and should use controlled machine load before stronger guarantees.

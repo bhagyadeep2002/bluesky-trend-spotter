@@ -33,7 +33,7 @@ class Settings:
     min_rate_ratio: float = 2
     candidate_min_frequency: int = 3
     detect_interval_seconds: float = 15
-    analysis_max_posts: int = 100_000
+    analysis_max_posts: int = 1_000_000
     raw_retention_hours: float = 6
     raw_budget_bytes: int = 1_073_741_824
     post_retention_hours: float = 6

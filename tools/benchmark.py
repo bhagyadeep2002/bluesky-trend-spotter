@@ -6,8 +6,11 @@ Add --postgres-url URL for an isolated temporary PostgreSQL schema.
 
 import argparse
 import asyncio
+import importlib.util
 import json
 import platform
+import subprocess
+import sys
 import tempfile
 import time
 from datetime import UTC, datetime, timedelta
@@ -182,10 +185,33 @@ def main():
         "--postgres-url", help="test database URL; a new owned schema is created then removed"
     )
     parser.add_argument("--output", type=Path, default=Path("docs/benchmark-sqlite.json"))
+    parser.add_argument(
+        "--database-revision", help="compare the database writer from a local Git revision"
+    )
     args = parser.parse_args()
     admin = None
     schema = "benchmark_" + uuid4().hex
     with tempfile.TemporaryDirectory(prefix="bluesky-benchmark-") as temporary:
+        database_type = Database
+        if args.database_revision:
+            source = Path(temporary) / "database_baseline.py"
+            source.write_text(
+                subprocess.run(
+                    ["git", "show", f"{args.database_revision}:src/bluesky_ingest/database.py"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout
+            )
+            spec = importlib.util.spec_from_file_location(
+                "bluesky_ingest._database_baseline", source
+            )
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            database_type = module.Database
+            # The temporary source path is not the repository migration root.
+            database_type.migrate = Database.migrate
         if args.postgres_url:
             admin = create_engine(args.postgres_url)
             with admin.begin() as connection:
@@ -193,11 +219,12 @@ def main():
             url = make_url(args.postgres_url).update_query_dict(
                 {"options": f"-csearch_path={schema}"}
             )
-            database = Database(url.render_as_string(hide_password=False))
+            database = database_type(url.render_as_string(hide_password=False))
         else:
-            database = Database(f"sqlite:///{temporary}/benchmark.db")
+            database = database_type(f"sqlite:///{temporary}/benchmark.db")
         try:
             result = asyncio.run(benchmark(database, Path(temporary) / "raw"))
+            result["database_writer_revision"] = args.database_revision or "working-tree"
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(result, indent=2) + "\n")
             print(json.dumps(result, indent=2))

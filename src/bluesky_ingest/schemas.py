@@ -96,6 +96,7 @@ class PipelineResponse(BaseModel):
     events_per_second: float
     persisted_per_second: float
     last_detection_at: str | None
+    last_detection_duration_seconds: float | None
     detection_error: str | None
     topics_evaluated: int
     latency_p50_seconds: float | None

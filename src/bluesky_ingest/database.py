@@ -121,36 +121,62 @@ class Database:
             )
             session.flush()
             session.execute(delete(Assignment).where(Assignment.post_uri == post.uri))
-            if current.deleted_at is None:
-                for candidate in extract_candidates(current.normalized_text or ""):
-                    topic_id = session.execute(
-                        self.insert(Topic)
-                        .values(
-                            label=candidate.label,
-                            normalized_key=candidate.key,
-                            created_at=received,
-                            last_seen_at=source,
-                            active=True,
-                        )
-                        .on_conflict_do_update(
-                            index_elements=["normalized_key"],
-                            set_={"last_seen_at": source, "active": True},
-                        )
-                        .returning(Topic.id)
-                    ).scalar_one()
-                    session.execute(
-                        self.insert(TopicTerm)
-                        .values(topic_id=topic_id, term=candidate.label, weight=candidate.weight)
-                        .on_conflict_do_nothing()
+            candidates = (
+                extract_candidates(current.normalized_text or "")
+                if current.deleted_at is None
+                else []
+            )
+            if candidates:
+                # Resolve all candidate IDs in one round trip; candidate keys are
+                # unique per post and returned IDs are matched by key, not order.
+                statement = self.insert(Topic)
+                statement = statement.on_conflict_do_update(
+                    index_elements=["normalized_key"],
+                    set_={
+                        "last_seen_at": statement.excluded.last_seen_at,
+                        "active": statement.excluded.active,
+                    },
+                ).returning(Topic.normalized_key, Topic.id)
+                topic_ids = dict(
+                    session.connection()
+                    .execute(
+                        statement,
+                        [
+                            dict(
+                                label=candidate.label,
+                                normalized_key=candidate.key,
+                                created_at=received,
+                                last_seen_at=source,
+                                active=True,
+                            )
+                            for candidate in candidates
+                        ],
                     )
-                    session.add(
-                        Assignment(
-                            topic_id=topic_id,
+                    .all()
+                )
+                session.connection().execute(
+                    self.insert(TopicTerm).on_conflict_do_nothing(),
+                    [
+                        dict(
+                            topic_id=topic_ids[candidate.key],
+                            term=candidate.label,
+                            weight=candidate.weight,
+                        )
+                        for candidate in candidates
+                    ],
+                )
+                session.connection().execute(
+                    self.insert(Assignment),
+                    [
+                        dict(
+                            topic_id=topic_ids[candidate.key],
                             post_uri=post.uri,
                             assigned_at=received,
                             relevance_score=candidate.weight,
                         )
-                    )
+                        for candidate in candidates
+                    ],
+                )
         return True
 
     def dispose(self) -> None:

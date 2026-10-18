@@ -103,7 +103,9 @@ Creates and updates replace current state; deletes clear text and remove topic
 assignments. Source timestamps/cursors and tombstones prevent older events from
 resurrecting deleted posts. The event table stores deduplication keys and minimal
 operational metadata, with no duplicate post text. Concurrent duplicate writes
-are tested. Raw duplicate deliveries remain intentionally inspectable.
+are tested. Candidate IDs, terms and assignments are written in batches per post,
+with IDs matched by normalized key and all writes rolled back together on failure.
+Raw duplicate deliveries remain intentionally inspectable.
 
 Candidates are deterministic hashtags, URL domains and conservative salient
 terms, capped at 12 per post. Stop words, spelled-out numbers and generic terms
@@ -128,8 +130,22 @@ current ≥ 10, increase ≥ 5 and ratio ≥ 2. Defaults:
 alpha = 2 and baseline floor = 1. All thresholds, baseline counts, formula,
 explanation, window times, detection runs and consecutive qualifying windows are
 stored. Two or more consecutive qualifying windows are labeled sustained.
-The bounded horizon is recomputed so updates/deletes change current scores.
-Rankings never treat old windows as current.
+SQL aggregates a consistent snapshot of the bounded horizon. A dedicated spawned
+process computes scores; it does not hold ingestion's writer lock during reads
+or CPU work. Versioned fingerprints in score components skip unchanged topics and
+windows, including posts that only affect the still-open window. Changed metrics
+use bulk upserts in transactions of at most 32 topics (200 rows per SQL batch).
+PostgreSQL publication uses FOR KEY SHARE to protect topic references and does not
+acquire ingestion's advisory lock; unchanged active flags are not rewritten.
+Old timeline rows are pruned in batches of 1,000. No schema migration is needed
+for this cache; old metrics receive signatures during the first detector run.
+
+The latest 13 windows are retained in the timeline. Late updates/deletes invalidate
+count fingerprints on the next run; a change arriving after a snapshot is scored
+on a later run. Evidence/search exclude deleted posts immediately. Publication is
+atomic per topic batch, rather than for the entire ranking, so a detector failure
+may leave partially refreshed topics until retry. Retry is idempotent and a broken
+worker process is replaced. Rankings never treat old windows as current.
 
 These are observed **activity spikes**. They do not establish truth, importance,
 virality, certainty, misinformation status or sensitive user attributes.
@@ -159,7 +175,11 @@ on returning to the tab; it handles loading, empty, stale and error states.
 Throughput is delivery rate averaged since process start, not unique-post rate.
 Lag is the latest persisted event's receipt/source lag and can become stale during
 an interruption. p50/p95 receipt-to-raw/database persistence latency uses at most
-1,024 recent samples. Checkpoint fsync follows that latency measurement. Prometheus
+1,024 recent samples. Checkpoint fsync follows that latency measurement.
+`last_detection_duration_seconds` is available in pipeline status and Prometheus;
+it includes process startup on the first run. Source lag includes upstream backlog;
+processing lag is the last event's receipt-to-persistence time and can understate
+current delay while writes are blocked. Prometheus
 counters reset on process restart. Health/readiness are separate from connection
 availability, which is exposed in pipeline status and the dashboard.
 
@@ -184,7 +204,7 @@ variables**, not `.env` automatically. Compose reads `.env` for interpolation.
 | `ALPHA` / `BASELINE_FLOOR` | 2 / 1 |
 | `MIN_CURRENT_COUNT` / `MIN_ABSOLUTE_INCREASE` / `MIN_RATE_RATIO` | 10 / 5 / 2 |
 | `CANDIDATE_MIN_FREQUENCY` | 3 |
-| `DETECT_INTERVAL_SECONDS` / `ANALYSIS_MAX_POSTS` | 15 seconds / 100,000 |
+| `DETECT_INTERVAL_SECONDS` / `ANALYSIS_MAX_POSTS` | 15 seconds / 1,000,000 |
 | `METRICS_HOST` / `METRICS_PORT` | `127.0.0.1` / 8000 |
 
 Raw envelopes preserve the exact source message (base64 for binary frames), local
@@ -253,8 +273,10 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-**Validated: 88 tests plus 32 original subtests with PostgreSQL enabled.** The
-default offline run passed 67 tests plus 32 subtests, skipping 21 PostgreSQL cases. Without
+**Validation:** full PostgreSQL-enabled regression passed 104 tests plus 32 original
+subtests before the final publication-lock refinement. That refinement passed
+45 targeted SQLite/PostgreSQL tests. The final offline run passed 76 tests plus
+32 subtests, skipping 30 PostgreSQL cases. Without
 `TEST_DATABASE_URL`, PostgreSQL-specific cases skip; the rest use temporary SQLite
 files, fixtures and fake WebSockets. No pytest case contacts live Bluesky or services outside the local test environment. UI checks require local Chromium and a running demo, and close
 their browser processes afterward.
@@ -274,9 +296,13 @@ backend/PostgreSQL and browser checks; it was not executed remotely in this sess
 
 [Reproducible measurements](docs/BENCHMARKS.md) include throughput, queue/latency,
 CPU/RSS, raw and relation footprint growth, duplicate rate, reconnect recovery and
-synthetic detection-to-API latency. The final short PostgreSQL run persisted
-**194.2 deliveries/sec**, with 594 unique events from 654 deliveries; this is a
-small controlled fixture result, not sustained production capacity.
+synthetic detection-to-API latency. The current batched-writer fixture run persisted
+**191.5 deliveries/sec** versus **118.0** with the previous writer, on 594 unique
+events from 654 deliveries. A larger detector fixture reduced a writer's maximum
+wait from **43.6 seconds** to **0.38 seconds** during an intermediate optimization
+bootstrap. The final lock refinement has separate concurrency tests. These are controlled
+fixture results, not sustained production capacity; details and limitations are in
+the benchmark documentation.
 
 ## Limits and maintenance
 
@@ -288,8 +314,11 @@ recent analysis horizon. Candidate grouping is lexical and stop words are mostly
 English; unrelated events can share terms. Measure detection quality on more
 labeled scenarios before increasing scope.
 
-The detector deliberately fails visibly if its 100,000-post horizon budget is
-exceeded; adjust after measurement. Six-hour retention bounds record age, while
+The detector deliberately fails visibly above its configurable 1,000,000-post
+horizon ceiling; this is a guardrail, not a tested capacity promise. The optimization
+benchmark used 200,000 posts and 800,000 assignments. The former 100,000-post
+ceiling could reject a full-network horizon before its baseline had warmed up.
+Adjust budgets after measurement. Six-hour retention bounds record age, while
 traffic rate, indexes, WAL and backups still determine disk requirements. This is a single-machine MVP with no auth, multi-node
 coordination, embeddings, fact checking or production availability guarantee.
 
