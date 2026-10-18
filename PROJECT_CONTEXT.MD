@@ -1,135 +1,157 @@
 # Project context
 
-Updated: 2026-10-18. Keep this file current with every project change; see AGENTS.MD.
+Updated: 2026-10-18. Keep this file current whenever code, configuration,
+dependencies, workflows, documentation or validation change. See AGENTS.MD.
 
-## Scope and progress
+## Objective and status
 
-The user authorized completing the full MVP from bluesky_early_warning_codex_brief.md,
-testing each stage before advancing. Preserve the original printing demo.
+The user authorized completing the full MVP in bluesky_early_warning_codex_brief.md,
+testing each stage before advancing. **All functional MVP stages are complete.**
+Final setup, limitations, commands and acceptance evidence are in README.md and
+its linked documents. No remote deployment or repository push was requested.
 
-1. Ingestion: complete. Bounded queues, legacy/v2 parser, raw rotation, metrics,
-   reconnects, graceful shutdown, offline replay.
-2. Durable checkpoint: complete. Atomic replace + fsync, source fingerprint,
-   inclusive resume after persisted raw events. Corrupt/mismatched checkpoints
-   fail closed. Replay never overwrites live checkpoints.
-3. PostgreSQL storage: complete. Eight migrated tables, unique event keys,
-   source-ordered current-state writes, cleared deletion text and tombstones,
-   bounded database retries. Raw fsync and database transaction precede checkpoints.
-4. Detection: complete. Deterministic hashtag/domain/term candidates (up to 12
-   per post), stop-word filtering, configurable minimum frequency, zero-filled
-   five-minute windows, 12 prior-window baseline, smoothed ratio, absolute/volume
-   gates, transparent scores, consecutive-window persistence and run records.
-5. API: complete. Health/readiness, pipeline status, ranked spikes, topic
-   detail/timeline/evidence and literal text search, response models, pagination,
-   input validation, sanitized database failures, no-store responses. Deleted
-   posts are excluded even before the next detection pass.
-6. Runtime/dashboard: complete. bluesky-serve combines ingestion, detector and
-   FastAPI. --demo uses separate SQLite synthetic data; --api-only serves existing
-   records. Responsive local HTML/CSS/JS overview, topic chart/evidence, search,
-   refresh and error states. No frontend build or external assets needed.
-7. Operations: complete. Compose builds/starts
-   PostgreSQL 18 and app with health checks. Raw rotation now enforces 24h TTL
-   and 1GiB budget. Hourly normalized maintenance clears text after 48h and old
-   metrics/runs after 7 days; minimal tombstones and dedup metadata remain.
-   Prometheus metrics and bounded latency samples are exposed. Migration 0002
-   widens generated PostgreSQL identifiers/sequences to bigint; SQLite rowids
-   already support 64 bits. CI workflow and reproducible benchmark/smoke tools
-   are included. Next: finalize documentation and commit the acceptance evidence.
+Stage history (tested before advancing): ingestion/checkpoints (36 tests),
+PostgreSQL/current-state writes (43), candidates/scoring (49), topic API (55),
+integrated dashboard/runtime (60), operations/failure/migration coverage (72).
+Each stage was committed separately. The original bluesky_firehose.py is preserved.
 
-## Architecture and commands
+## Architecture
 
-Python 3.14; src/bluesky_ingest contains the consumer. FastAPI metrics and CLI
-already exist. Raw envelopes include source payload, ingestion time, parsed
-metadata and stable duplicate keys. Raw data and local environments are ignored.
-Checkpoint is RAW_DIR/checkpoint.json. A consumer owns one output directory.
+Python 3.14, uv/uv.lock, FastAPI, websockets, SQLAlchemy 2.0.55, Alembic 1.20.0,
+psycopg 3.3.6 and PostgreSQL 18. SQLite is an isolated test/offline-demo adapter.
+No Kafka, embedding service, cloud infrastructure or frontend build is needed.
 
-Use uv and pyproject.toml; uv.lock now includes pytest, pytest-asyncio, httpx,
-ruff and psutil in the dev group. Existing unittest cases remain discoverable
-by pytest. SQLAlchemy 2.0.55, Alembic 1.20.0 and psycopg 3.3.6 are pinned runtime
-dependencies. Retired the earlier requirements.lock; uv.lock is authoritative.
+- src/bluesky_ingest/events.py: legacy/v2 post create/update/delete validation,
+  normalization, stable canonical event keys, malformed/unknown handling.
+- service.py/storage.py/checkpoint.py: bounded queue and frame/message limits,
+  structured payload-free logs, reconnect backoff/jitter, raw JSONL fsync/rotation,
+  transient DB retries, atomic source-specific checkpoints after raw + DB success.
+- models.py/database.py: current posts, minimal dedup event records, topics/terms,
+  assignments, window metrics and detection runs. Source order and tombstones
+  protect against stale resurrection; deletes clear current text/assignments.
+- candidates.py/detection.py: capped deterministic hashtags/domains/terms, stop
+  words, zero-filled completed windows, smoothed ratio, absolute/volume gates,
+  reproducible score components, consecutive-window persistence, run records.
+- api.py/schemas.py: response models, input validation, pagination, sanitized DB
+  errors, no-store responses, topic/evidence/search routes, health/readiness and
+  Prometheus text metrics. Deleted posts never enter new evidence/search results.
+- runtime.py/static/: combined app lifecycle, detector/maintenance tasks and local
+  responsive HTML/CSS/JS dashboard. Updates every 15s and when a tab regains focus.
+  Demo always uses separate data/demo.db and synthetic data with visible labels.
+- migrations/: revision 0001 initial schema; 0002 PostgreSQL 64-bit generated
+  identifiers AND sequences (SQLite INTEGER rowids already support 64 bits).
+- maintenance.py: hourly text expiry, old metric/run/inactive-topic cleanup.
 
-    uv sync --locked
-    .venv/bin/python -m pytest -q
-    .venv/bin/bluesky-ingest --replay tests/fixtures/events.jsonl --no-metrics
-    .venv/bin/bluesky-ingest --limit 10 --no-metrics
+Scoring defaults: five-minute latest completed window, 12 baseline windows,
+alpha=2, floor=1, current>=10, increase>=5, ratio>=2; score=increase*log2(ratio)
+when eligible. Candidate minimum horizon frequency=3, at most 12 terms/post.
+Detector runs every 15 seconds and rejects horizons above 100,000 posts. Typical
+timeline contains the latest 13 recomputed windows; baseline counts are stored
+in each metric. Empty history is zero, so warmup/coverage uncertainty matters.
 
-## Environment and validation
+## Commands
 
-Full filesystem, network and local socket access is now enabled. Restored the
-original aff4095 history into normal workspace .git; use normal git commands.
-The earlier temporary Git repository and milestone1.bundle are historical
-fallbacks, no longer the primary repository.
+```sh
+uv sync --locked
+uv run bluesky-serve --demo
+# Open http://127.0.0.1:8000
 
-Original 32 tests passed again. Checkpoint stage tests are passing. A live v2
-smoke run received and persisted 10 valid post events, exit 0, no malformed events
-or errors; raw files were held in a temporary directory and removed afterward.
-This is a short capture check, not a sustained throughput benchmark.
+# Full live app with managed local PostgreSQL, migrations and health checks:
+docker compose up --build
 
-Docker Desktop is installed but its daemon is stopped. Postgres.app supplies
-PostgreSQL 18. An isolated development/test cluster has been initialized at
-/private/tmp/bluesky-project-pg, bound to 127.0.0.1:55432, database bluesky_test,
-user bluesky (local trust authentication, no real credentials). Do not touch
-other database clusters. Compose reproducibility will be added later.
+# Or use a separately configured local database:
+export DATABASE_URL='postgresql+psycopg://bluesky:local-development-only@127.0.0.1:5432/bluesky'
+uv run alembic upgrade head
+uv run bluesky-serve
+# --api-only serves existing data without a stream connection.
 
-## Current limitations and decisions
+uv run pytest -q
+TEST_DATABASE_URL='postgresql+psycopg://bluesky:local-development-only@127.0.0.1:5432/bluesky' uv run pytest -q
+uv run ruff check src tests migrations tools
+uv run ruff format --check src tests migrations tools
+npm ci && npx playwright install chromium
+npm run test:ui  # Requires running, explicitly labeled demo; no live screenshots.
+```
 
-DATABASE_URL enables normalized database writes in the ingestion CLI; unset
-means raw-only capture. Apply migrations with DATABASE_URL=... uv run alembic
-upgrade head. The integrated runtime and dashboard are implemented. SQLite is a local test
-and offline demo adapter; PostgreSQL is the normal deployment database. No retention/redaction
-policy yet; raw logs can retain subsequently deleted text and rotation does not
-cap total disk growth. No performance/continuous capture guarantees claimed.
-Prefer a server-rendered dashboard with local assets and no Node build chain.
+Environment variables are listed in .env.example. Python does not automatically
+load .env. Without DATABASE_URL the standalone bluesky-ingest command is raw-only;
+with it, capture/replay also applies normalized transactions. Replay never advances
+a live checkpoint. A new downstream DB requires explicit raw replay; a cursor alone
+does not rebuild history. Use a distinct output directory for replay.
 
-Storage-stage validation: 43 tests passed (including actual PostgreSQL schema isolation,
-idempotency, out-of-order deletion protection, transient DB failure and raw
-recovery). PostgreSQL Alembic upgrade and check passed with no schema drift.
-Run integration tests with TEST_DATABASE_URL=postgresql+psycopg://bluesky@127.0.0.1:55432/bluesky_test uv run pytest -q.
+## Validated results
 
-Detection validation: synthetic #aurora rose from 4 to 24 posts/window and ranked
-above stable #steady at 40/window; tiny two-post noise was excluded. Repeated
-detection and duplicate replay keep counts stable; deletes remove assignments
-and current scores. Tests passed on SQLite and PostgreSQL; Ruff checks pass.
-Windows score the latest completed interval; maximum expected boundary wait is
-five minutes plus detector interval. Missing history is represented by zeros,
-so baseline warmup and incomplete coverage remain documented limitations.
+- Final full backend suite: **72 passed, 32 original subtests**, PostgreSQL cases
+  enabled, in 14.22 seconds. Includes migration upgrade/downgrade and drift checks,
+  concurrent duplicates, out-of-order deletes, term reassignment, retries/raw
+  recovery, bounded slow writes, analysis budget, retention, API and runtime tests.
+- Ruff checks/format pass, uv lock consistency and installed dependency compatibility
+  pass, Compose configuration passes. Remote GitHub Actions was not run; supplied
+  workflow runs local-equivalent backend/PostgreSQL/browser checks.
+- Standalone Playwright Chromium UI checks passed: overview/detail navigation,
+  refresh, evidence pagination, timeline table, search/empty state, API docs route,
+  error recovery, missing topic, safe script-like source text, desktop/mobile fit.
+  Final screenshots were reviewed; selected synthetic-only images are committed in
+  docs/screenshots. No horizontal page overflow at 390px. See docs/UI_QA.md.
+- The in-app Browser had no available connection and its Node runtime could not
+  launch Chromium; standalone npm QA succeeded. npm is optional QA tooling only.
+- Live v2 10-event capture passed. Separate Compose stack built, started, migrated
+  a populated PostgreSQL DB to 0002, ingested real posts, and passed actual HTTP
+  health/readiness/metrics checks. Controlled DB outage returned readiness 503,
+  queue peaked at its 256 limit, persistence recovered, SIGTERM drained all accepted
+  events, and restart observed an inclusive-cursor duplicate. docs/compose-smoke.json
+  records 278 received/persisted at shutdown and one restart duplicate.
+- Uvicorn intentionally re-raises SIGTERM after lifespan cleanup; Docker exit 143
+  is expected. application_stopped logs showed equal counts and queue depth zero.
+- Short real-local-WebSocket benchmark: 594 unique events, 654 deliveries, one forced
+  1011 disconnect. PostgreSQL: 194.2 persisted deliveries/sec, p95 348.5ms, peak queue
+  64/64, ~104.2MiB RSS. Stable high volume and two-post noise did not outrank the
+  4→24 spike. SQLite results and CPU/storage/latency/recovery evidence are in
+  docs/BENCHMARKS.md and JSONs. These are short fixture measurements, not sustained
+  throughput or complete capture guarantees; source events are backdated.
 
-Latest validation: 55 tests passed, 32 original subtests, with both SQLite and
-PostgreSQL fixtures. API checks include stale ranking exclusion, pagination,
-invalid inputs, missing topics, deletion exclusion, readiness, safe database
-errors and response models. The API serves only latest completed-window scores
-as current; older topic details explicitly report data_stale.
+## Retention and limits
 
-Latest runtime/UI validation: 60 backend tests passed with PostgreSQL enabled.
-Standalone Playwright Chromium checks passed for desktop/mobile, navigation,
-refresh, evidence pagination, timeline table, search and empty results, failed
-request recovery, missing topic, API docs and script-like text rendering.
-Screenshots were visually inspected and selected synthetic-only screenshots
-are in docs/screenshots. No horizontal overflow on 390px viewport. Fixed UTC
-serialization and overlapping mobile chart labels. In-app Browser discovery was
-unavailable; standalone npm QA succeeds. npm is needed only for optional UI QA,
-not for running the app. See docs/UI_QA.md.
+Raw defaults: 24h mtime TTL, 1GiB budget, enforced at new-file creation/rotation;
+quiet or stopped processes do not schedule purges. A budget can shorten retention.
+Raw logs can retain subsequently deleted text until expiry; immediate raw
+redaction is not implemented. Full runtime hourly maintenance expires normalized
+text after 48h; standalone ingestion does not run that DB maintenance. Metrics/runs
+older than seven days are pruned; minimal event keys and tombstones are kept, so
+metadata/WAL/database size is not globally capped. Raw references may expire.
 
-Commands: uv run bluesky-serve --demo (localhost:8000); npm ci;
-npx playwright install chromium; npm run test:ui with the demo running.
-A local demo process is running on port 8000 for validation.
+Coverage depends on relay, filters, connectivity and upstream lookback. Window
+boundary wait can be up to five minutes plus detection interval/backlog. Grouping
+is lexical with mostly English stop words and can combine unrelated events. Cold
+history and missing windows are uncertain. No truth/virality/misinformation claims
+or sensitive user profiling. Queues and samples are bounded, but long-term data
+volume and detector budgets require measurement. A failed disk/forced crash may
+leave a partial raw tail or lose unpersisted messages. No exactly-once capture,
+multi-process coordination, auth, multi-node availability or production SLO claimed.
 
-Operations validation: 72 backend tests and 32 original subtests passed, including
-actual PostgreSQL migration upgrade/downgrade and metadata drift checks, concurrent
-duplicate delivery, changed-term updates, analysis-budget failures, retention and
-metrics. Docker live smoke passed: readiness 503 during a deliberate DB outage,
-queue stayed bounded at 256, recovery occurred after DB restart, accepted events
-drained at shutdown, and inclusive checkpoint restart observed one duplicate.
-Uvicorn intentionally re-raises SIGTERM after cleanup; Docker exit 143 is expected
-and is accompanied by application_stopped metrics with queue depth 0.
-Benchmark tools use actual local WebSockets plus SQLite/PostgreSQL and measure
-CPU/RSS, latency, throughput, duplicate rate, raw disk growth and recovery.
+Next recommended work: longer soak tests and a broader labeled quality evaluation,
+then tune retention/window budgets from measured demand. MVP work is complete.
 
-Final operations acceptance: 72 tests passed with PostgreSQL enabled; Ruff check
-and formatting, uv lock consistency, installed dependency compatibility and
-Compose configuration passed. A populated Docker database upgraded from 0001 to
-0002 and the live outage/restart/shutdown smoke passed again. Recorded evidence
-is docs/compose-smoke.json. Final synthetic benchmark JSONs include measured
-raw plus normalized relation growth, latency, throughput and CPU/RSS. These are
-short fixture measurements, not sustained production capacity. Docker validation
-services/volumes will be removed after checks; the separate local demo remains.
+## Workspace/session state
+
+Normal workspace .git contains all project history on main. Earlier aff4095
+milestone1.bundle and /private/tmp Git fallbacks are historical; normal Git writes
+now work. No credentials, local environments, captures, node_modules or caches
+are committed.
+
+The offline demo is running on 127.0.0.1:8000 (PID 9604 at this update). The isolated
+bluesky-validation Compose services and volumes were removed after validation;
+no test live capture is left running. Docker Desktop remains available. The owned
+native PostgreSQL test cluster /private/tmp/bluesky-project-pg was stopped after
+checks; it used port 55432, local trust user bluesky and database bluesky_test.
+Its test data is temporary; normal setup should use documented Compose commands.
+
+Final documentation/setup acceptance: uv sync --locked succeeded; with the owned
+PostgreSQL cluster stopped and TEST_DATABASE_URL unset, the default offline suite
+passed 57 tests plus 32 subtests, skipping the 15 optional PostgreSQL cases. The
+full 72-case run above was completed while the isolated PostgreSQL server was up.
+The final demo answered HTTP 200 for health, readiness, pipeline status, ranked
+#aurora demo data and Prometheus metrics. README local links were verified.
+README and docs/BENCHMARKS.md now contain the complete setup, launch, replay,
+configuration, measurements and limitations rather than obsolete milestone-1
+instructions. All requested work is complete; the demo is the only app left running.

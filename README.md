@@ -1,262 +1,276 @@
-# Bluesky early warning: Milestone 1
+# Signal Watch
 
-A local Jetstream consumer for the first task in
-`bluesky_early_warning_codex_brief.md`. It validates public post creates,
-updates, and deletes, writes rotating raw JSONL, reconnects with bounded
-exponential backoff and jitter, and exposes ingestion metrics.
+A local Bluesky activity early-warning system: reliable Jetstream ingestion,
+replayable raw events, PostgreSQL current state, transparent spike detection,
+and a dashboard that links every signal to its evidence.
 
-The original `bluesky_firehose.py` remains available as a small printing demo.
-The reliable consumer is the `bluesky-ingest` command below.
+![Synthetic demo overview](docs/screenshots/overview.png)
 
-## Setup
+## Try it without a live connection
 
-Use Python 3.14 and uv. Dependencies are pinned in pyproject.toml and uv.lock.
-
-```sh
-uv sync --locked
-uv run pytest -q
-```
-
-To enable normalized PostgreSQL writes, export DATABASE_URL and migrate first:
-
-```sh
-export DATABASE_URL=postgresql+psycopg://bluesky:bluesky@127.0.0.1:5432/bluesky
-uv run alembic upgrade head
-```
-
-Without DATABASE_URL the ingestion command captures raw events only.
-Database writes deduplicate event keys, order updates by source time/cursor,
-clear deleted text, and retain tombstones against stale replay. Checkpoints
-advance after both raw fsync and database commit. Database outages retry a
-bounded number of times, apply queue backpressure, then fail with raw data kept
-for replay. SQLite is supported for isolated tests and offline demos.
-
-## Run locally
-
-Replay the included synthetic fixtures without a network connection or an HTTP
-listener. All six messages are persisted: four post events, one ignored identity
-event, and one malformed payload. These are demo fixtures, not real activity.
-
-```sh
-RAW_DIR=data/demo .venv/bin/bluesky-ingest --replay tests/fixtures/events.jsonl --no-metrics
-```
-
-Consume the live public stream and serve metrics on `127.0.0.1:8000`:
-
-```sh
-.venv/bin/bluesky-ingest
-```
-
-Stop with Ctrl+C or SIGTERM. Receipt stops, the WebSocket closes, queued
-messages drain, and the writer closes. A connection attempt may take up to
-10 seconds to time out; socket close timeout is 5 seconds. Drain time depends
-on disk health and queue depth. Persistence errors stop the process with a
-nonzero exit status. A startup failure of the HTTP server also stops ingestion.
-
-```sh
-curl http://127.0.0.1:8000/healthz
-curl http://127.0.0.1:8000/api/v1/pipeline/status
-```
-
-Use `--limit 100` to stop after 100 received messages (including malformed and
-ignored messages); the default `0` runs continuously. Use `--no-metrics` where
-binding a local HTTP port is unavailable. Final metrics are always logged.
-
-Replay a saved raw file into a different directory:
-
-```sh
-RAW_DIR=data/replayed .venv/bin/bluesky-ingest --replay data/demo/events-REPLACE-WITH-FILENAME.jsonl --no-metrics
-```
-
-Replay accepts one file per invocation, either source JSONL or saved envelopes.
-Replay files in filename order if processing several rotated files. It creates
-new receipt timestamps and retains source event keys; it does not contact
-Bluesky. Invalid or truncated source JSON lines are persisted as malformed.
-
-## Configuration
-
-See `.env.example`. Variables must be exported; the CLI does not load `.env`
-automatically. Defaults:
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `JETSTREAM_URL` | Current US East v2 subscribeEvents endpoint | WebSocket source |
-| `RAW_DIR` | `data/raw` | Raw envelope directory |
-| `QUEUE_SIZE` | `256` | Maximum pending envelopes |
-| `MAX_MESSAGE_BYTES` | `1048576` | Maximum source message size |
-| `RAW_MAX_BYTES` | `16777216` | Rotate before exceeding this envelope size |
-| `RAW_ROTATE_SECONDS` | `300` | Rotate on next append after this age |
-| `BACKOFF_INITIAL` | `1` | Initial retry ceiling in seconds |
-| `BACKOFF_MAX` | `30` | Maximum retry ceiling in seconds |
-| `METRICS_HOST` | `127.0.0.1` | HTTP bind address |
-| `METRICS_PORT` | `8000` | HTTP port |
-
-The default subscription filters post commits and negotiates `xrpc.v1.json`.
-Legacy `/subscribe` URLs use `wantedCollections` and legacy event parsing, e.g.:
-
-```sh
-JETSTREAM_URL=wss://jetstream2.us-east.bsky.network/subscribe .venv/bin/bluesky-ingest
-```
-
-Protocol references: [current Jetstream documentation](https://bsky.network/docs/jetstream/),
-[legacy event shapes](https://github.com/bluesky-social/jetstream-legacy), and
-[websockets client API](https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html).
-
-## Architecture and semantics
-
-Implementation plan: settings and parser → append log → bounded queue and
-reconnect supervisor → metrics and CLI → deterministic failure tests.
-
-`service.py` separates receipt from a single persistence worker using a bounded
-async queue. The WebSocket frame buffer is also bounded (16 frames), and messages
-are size limited. A slow disk applies backpressure. Disk operations run in a
-thread so HTTP and socket tasks can continue. Parsing is deterministic and
-preserves original text; normalization only applies NFC and collapses whitespace.
-
-Each JSONL line has `schema_version`, local `ingested_at`, `raw_encoding`, exact
-source `raw` message, `disposition`, and optional parsed `post` metadata.
-Binary frames use base64. Parsed metadata includes record URI, DID, operation,
-source time/cursor, languages, and a canonical source-event SHA-256 key.
-Deletes produce metadata with no normalized post text. Unknown kinds,
-collections, and operations are ignored for post processing but saved in raw
-storage; invalid supported event shapes are marked malformed.
-
-Each append flushes and fsyncs before advancing persisted metrics or the
-in-memory reconnect cursor. New files use exclusive creation and unique names;
-restart does not truncate existing logs. The directory entry is fsynced when a
-file is created. Rotation uses local elapsed time and actual encoded bytes; a
-single envelope may exceed `RAW_MAX_BYTES` and remains intact in its own file.
-There is no file creation just because a quiet time interval elapsed.
-
-Retries use an exponentially growing ceiling capped at `BACKOFF_MAX`, with
-equal jitter between half the ceiling and the ceiling. Receipt on a connection
-resets the retry sequence. Both clean and unexpected disconnects reconnect.
-Reconnect requests the last **persisted supported post** cursor, inclusively.
-Raw duplicate deliveries are intentionally preserved with stable event keys;
-counts in this milestone count deliveries, not unique posts. Future analytical
-storage must deduplicate events and implement current-post state.
-
-`/api/v1/pipeline/status` exposes connection state, received/persisted counts,
-valid/malformed/ignored counts, retries, errors, receipt/persistence timestamps,
-queue depth/capacity, latest source and processing lag, and throughput averaged
-since process start. Source lag uses the latest persisted supported event's
-source timestamp; processing lag includes queue and disk time. Lag values are
-last-event measurements and can become stale while disconnected. `/healthz`
-reports process health, not stream availability. HTTP endpoints have no auth and
-default to loopback. Application logs contain event names and error classes,
-without source payloads or configured source URLs.
-
-## Tests and validation
-
-```sh
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-Tests use synthetic fixtures and in-memory fake WebSockets; there is no live
-Bluesky dependency, DNS, or bound port in the test suite. HTTP tests exercise the
-real FastAPI app through ASGI calls. Coverage includes v1/v2 parsing, unknown
-events, malformed payloads, stable duplicate keys, updates/deletes, reconnects,
-shutdown, slow writes and bounded queues, disk/fsync failures, size/time rotation,
-restart-safe file naming, raw replay, metrics, settings, and CLI exit behavior.
-
-The suite uses pytest and pytest-asyncio, including the original standard-library
-unittest cases. PostgreSQL integration cases run when TEST_DATABASE_URL is set;
-otherwise those cases skip and all other tests use isolated local SQLite files.
-
-Actual validation results and environment constraints are recorded in
-`PROJECT_CONTEXT.MD`. No throughput benchmark or continuous live-capture claim
-is made from the small fixture run.
-
-## Limits and next milestone
-
-Coverage depends on the upstream relay, filters, connectivity, and upstream
-retention. This consumer does not capture the entire network. It currently provides raw and optional normalized ingestion; the topic
-detector, topic API and dashboard are the next stages.
-
-A durable `RAW_DIR/checkpoint.json` resumes from the last acknowledged supported
-post cursor on restart. It is source-specific and replaced atomically after
-fsync. Corrupt or mismatched checkpoints fail closed. Offline replay never
-overwrites the live cursor. Resume is inclusive and limited by upstream lookback;
-raw duplicate deliveries remain possible. Next: idempotent current-post storage.
-
-Raw logs can contain text from posts subsequently deleted. This milestone has
-no raw-log redaction or automatic retention/purge policy and no current-state
-queries. Keep raw logs local, retain only the operational data needed, and
-remove obsolete captures. A retention/redaction policy is required before
-extended capture or display of retained posts. Rotation alone does not cap
-total disk usage. A forced kill, failed disk, or power loss may leave an
-unacknowledged partial final line or lose data not yet persisted; there is no
-exactly-once or end-to-end crash-recovery guarantee. Run one consumer per output
-directory; startup crash repair and multi-process coordination are future work.
-
-## Project context and Git
-
-`AGENTS.MD` requires keeping `PROJECT_CONTEXT.MD` current and committing completed
-changes. The user has now authorized completion of the full MVP in tested stages.
-The workspace now has a normal `.git` repository restored from the initial
-milestone's history. Use ordinary `git status` and `git log` commands.
-
-The original `milestone1.bundle` and temporary Git repository are historical
-fallbacks. Generated captures, bundles, credentials and caches remain ignored.
-The current reproducible development dependency lock is `uv.lock`:
-
-```sh
-uv sync --locked
-uv run pytest -q
-```
-
-## Detection stage
-
-Candidates are hashtags, URL hostnames, and conservative terms, capped at 12 per
-post with common stop words removed. Updates replace assignments and deletes
-remove them. The detector recomputes current-state counts across a bounded
-window horizon and scores completed windows. Default baseline: 12 prior windows
-of five minutes, including zero-count windows. Smoothing alpha=2, baseline
-floor=1; gates require at least 10 current posts, an absolute increase of 5 and
-a smoothed rate ratio of 2. Score = absolute increase × log2(rate ratio), or zero
-when a gate fails. Consecutive eligible windows distinguish sustained activity.
-All components and detection runs are persisted for inspection.
-
-A topic starting from absent history can be detected after enough absolute
-volume; the model cannot establish network-wide coverage or truth/importance.
-Only completed windows are scored; boundary wait can be five minutes. The next
-stage exposes these data through the topic API.
-
-## Topic API
-
-The FastAPI application in bluesky_ingest.api exposes /healthz, /readyz,
-/api/v1/pipeline/status, /api/v1/topics/trending, /api/v1/topics/{id},
-/api/v1/topics/{id}/posts, /api/v1/topics/{id}/timeline and /api/v1/search?q=... .
-Lists validate limit/offset; the detector currently supports the configured
-window size only. Current rankings exclude stale completed windows; evidence
-and search always exclude deleted posts. Database failures return sanitized 503
-responses. The full server/dashboard launcher is the next implementation stage.
-
-## Dashboard runtime
+Requirements: Python 3.14 and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 uv sync --locked
 uv run bluesky-serve --demo
 ```
 
-Open http://127.0.0.1:8000. Demo mode always uses a dedicated SQLite database at
-`data/demo.db`, resets its synthetic contents at startup and at window boundaries,
-and labels all screens. It never opens Bluesky. Live mode requires DATABASE_URL,
-applied migrations, and `uv run bluesky-serve`. The runtime ingests and detects in
-background tasks while serving the dashboard. `--api-only` disables live receipt.
+Open **http://127.0.0.1:8000**. The demo uses a dedicated SQLite database at
+`data/demo.db`, resets and seeds it at startup and window boundaries, and labels
+all screens and synthetic evidence. It ignores `DATABASE_URL` and never opens
+Bluesky. It demonstrates a topic rising from 4 to 24 posts/window, a stable topic
+at 40, and low-volume noise. Counts and charts come from the database and detector.
+Stop with Ctrl+C.
 
-The local HTML/CSS/JS dashboard has no frontend build or external asset service.
-Optional UI checks: `npm ci`, `npx playwright install chromium`, then
-`npm run test:ui` while the demo is running. See docs/UI_QA.md.
+Installation needs package access or a populated uv cache. Runtime dashboard
+assets are local HTML/CSS/JavaScript; no frontend build or npm installation is
+required. FastAPI's optional interactive `/docs` page loads Swagger assets from
+its CDN; `/openapi.json` is available locally.
 
-## Operations and measurement
+## Live mode with Docker Compose
 
-Docker Compose now builds and runs the full app with PostgreSQL 18. A separate
-validation stack passed live receipt, readiness, a controlled database outage,
-bounded-queue recovery, graceful draining and checkpoint replay after restart.
-Raw retention defaults to 24h with a 1GiB budget, enforced at rotation/startup.
-The full runtime expires normalized text after 48h (hourly maintenance), retains
-metrics/runs for 7 days and preserves minimal tombstones/deduplication metadata.
-`/metrics` exposes Prometheus text metrics; latency percentiles use a bounded
-rolling sample. Reproducible benchmark and smoke scripts are in tools/.
-Generated PostgreSQL identifiers and sequences use bigint in migration 0002.
+```sh
+docker compose up --build
+```
+
+This starts PostgreSQL 18, applies Alembic migrations, and launches ingestion,
+detection and the dashboard on http://127.0.0.1:8000. Health checks use database
+readiness and `/readyz`. Stop the demo first if it occupies port 8000, or override
+ports with `APP_PORT=8001 POSTGRES_PORT=5433 docker compose up --build`.
+
+Default credentials are explicitly local development values. `POSTGRES_PASSWORD`
+can override them; use URL-safe characters or URL-encode the password when
+configuring a separate connection URL. Ports bind to loopback. Data persists in
+Compose volumes. Stop with `docker compose down`; adding `--volumes` also deletes
+that project's stored data. No cloud deployment or external publishing is involved.
+
+## Live mode with local Python
+
+Start a local PostgreSQL database, then:
+
+```sh
+export DATABASE_URL='postgresql+psycopg://bluesky:local-development-only@127.0.0.1:5432/bluesky'
+uv run alembic upgrade head
+uv run bluesky-serve
+```
+
+`--api-only` serves existing data and runs detection without opening the stream.
+`DATABASE_URL` is required for normal server mode. A fresh database initially has
+no topics; activity must meet configured thresholds. Missing history is treated
+as zero, so interpret signals cautiously during baseline warmup.
+
+The original `bluesky_firehose.py` printing demo is preserved. For capture/replay
+without the dashboard, use the separate ingestion command:
+
+```sh
+# Raw capture only: leave DATABASE_URL unset.
+env -u DATABASE_URL uv run bluesky-ingest --limit 100 --no-metrics
+
+# Fully offline synthetic fixture replay.
+env -u DATABASE_URL RAW_DIR=data/fixture uv run bluesky-ingest --replay tests/fixtures/events.jsonl --no-metrics
+
+# Replay one saved raw file into a different output directory.
+env -u DATABASE_URL RAW_DIR=data/replayed uv run bluesky-ingest --replay data/raw/events-REPLACE.jsonl --no-metrics
+```
+
+With `DATABASE_URL` set, the ingestion command also writes normalized records.
+Its default limit is 0 (continuous); limits count all received messages, including
+ignored/malformed messages. Replay accepts source JSONL or saved envelopes, one
+file per invocation. Replay rotated files in filename order. It preserves source
+event keys/times, assigns new local receipt timestamps, and never changes the live
+checkpoint. Source ordering and stable event keys make repeated replay idempotent
+in normalized storage. The standalone command does not run the full runtime's
+hourly database maintenance.
+
+## Pipeline and scoring
+
+```text
+Jetstream v2 (or legacy v1)
+    → bounded async queue
+    → rotating raw JSONL + fsync
+    → validated current-post transaction + candidate assignments
+    → atomic durable checkpoint
+    → completed-window aggregates + spike scores
+    → FastAPI + local dashboard
+```
+
+Creates and updates replace current state; deletes clear text and remove topic
+assignments. Source timestamps/cursors and tombstones prevent older events from
+resurrecting deleted posts. The event table stores deduplication keys and minimal
+operational metadata, with no duplicate post text. Concurrent duplicate writes
+are tested. Raw duplicate deliveries remain intentionally inspectable.
+
+Candidates are deterministic hashtags, URL domains and conservative salient
+terms, capped at 12 per post. Stop words and generic terms are excluded. Topics
+are shared-term groups, not semantic event clusters. Each topic's fixed windows
+include zeros and use its own recent baseline.
+
+Default scoring uses the latest **completed five-minute window** and 12 prior
+windows. Let `current` be its count and `baseline` the mean of those prior counts:
+
+```text
+ratio = (current + alpha) / (max(baseline, baseline_floor) + alpha)
+increase = current - baseline
+score = increase × log2(ratio)
+```
+
+The score is zero unless current ≥ 10, increase ≥ 5 and ratio ≥ 2. Defaults:
+alpha = 2 and baseline floor = 1. All thresholds, baseline counts, formula,
+explanation, window times, detection runs and consecutive qualifying windows are
+stored. Two or more consecutive qualifying windows are labeled sustained.
+The bounded horizon is recomputed so updates/deletes change current scores.
+Rankings never treat old windows as current.
+
+These are observed **activity spikes**. They do not establish truth, importance,
+virality, certainty, misinformation status or sensitive user attributes.
+
+## API and monitoring
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /healthz` | Process/pipeline fatal-error health |
+| `GET /readyz` | Migrated database and pipeline/detector readiness |
+| `GET /api/v1/pipeline/status` | Connection, rates, lag, queue, errors, last event/detection |
+| `GET /api/v1/topics/trending?window_minutes=5&limit=20` | Current ranked spikes |
+| `GET /api/v1/topics/{id}` | Terms, explanation, score components, recent metrics |
+| `GET /api/v1/topics/{id}/posts?limit=10&offset=0` | Available evidence in the scored window |
+| `GET /api/v1/topics/{id}/timeline?limit=30` | Topic window time series |
+| `GET /api/v1/search?q=aurora&limit=20&offset=0` | Literal text search across available posts |
+| `GET /metrics` | Prometheus text metrics |
+| `GET /openapi.json` | Response models and API schema |
+
+Lists validate limits/offsets; topic IDs that do not exist return 404, invalid
+parameters return 422, and database failures return sanitized 503 responses.
+Only the configured window size is accepted. Deleted/unavailable posts are
+excluded from evidence and search, even before the next detection pass.
+Responses disable caching. The dashboard polls every 15 seconds and refreshes
+on returning to the tab; it handles loading, empty, stale and error states.
+
+Throughput is delivery rate averaged since process start, not unique-post rate.
+Lag is the latest persisted event's receipt/source lag and can become stale during
+an interruption. p50/p95 receipt-to-raw/database persistence latency uses at most
+1,024 recent samples. Checkpoint fsync follows that latency measurement. Prometheus
+counters reset on process restart. Health/readiness are separate from connection
+availability, which is exposed in pipeline status and the dashboard.
+
+## Configuration and storage policy
+
+See `.env.example` for every variable. Python commands read **exported environment
+variables**, not `.env` automatically. Compose reads `.env` for interpolation.
+
+| Setting | Default |
+| --- | --- |
+| `JETSTREAM_URL` | Current US East v2 subscribeEvents endpoint |
+| `DATABASE_URL` | Unset; required for live server mode |
+| `RAW_DIR` | `data/raw` |
+| `QUEUE_SIZE` / WebSocket frame buffer | 256 / 16 |
+| `MAX_MESSAGE_BYTES` | 1 MiB |
+| `RAW_MAX_BYTES` / `RAW_ROTATE_SECONDS` | 16 MiB / 300 seconds |
+| `RAW_RETENTION_HOURS` / `RAW_BUDGET_BYTES` | 24 hours / 1 GiB |
+| `POST_RETENTION_HOURS` | 48 hours since local ingestion |
+| `BACKOFF_INITIAL` / `BACKOFF_MAX` | 1 / 30 seconds |
+| `DATABASE_RETRIES` / `DATABASE_RETRY_SECONDS` | 5 / 1 second |
+| `WINDOW_MINUTES` / `BASELINE_WINDOWS` | 5 / 12 |
+| `ALPHA` / `BASELINE_FLOOR` | 2 / 1 |
+| `MIN_CURRENT_COUNT` / `MIN_ABSOLUTE_INCREASE` / `MIN_RATE_RATIO` | 10 / 5 / 2 |
+| `CANDIDATE_MIN_FREQUENCY` | 3 |
+| `DETECT_INTERVAL_SECONDS` / `ANALYSIS_MAX_POSTS` | 15 seconds / 100,000 |
+| `METRICS_HOST` / `METRICS_PORT` | `127.0.0.1` / 8000 |
+
+Raw envelopes preserve the exact source message (base64 for binary frames), local
+receipt timestamp, validation disposition and parsed metadata. Appends flush and
+fsync; new filenames are exclusive and unique. Rotation occurs on the next append
+by elapsed time/encoded size. One oversized envelope remains intact if it fits
+the total budget. Closed raw files are pruned on new-file creation/rotation by
+mtime age and budget, reserving space for the next file. This can retain less than
+24 hours at high volume. Quiet/stopped processes do not run scheduled raw purges.
+
+The full runtime runs normalized maintenance hourly: text older than 48 hours is
+cleared and made unavailable; metrics/runs older than seven days and old inactive
+candidates are removed. Minimal tombstones and event dedup metadata are retained
+to preserve ordering/idempotency. Their database growth is not capped and needs
+measurement for extended runs. Raw logs may retain subsequently deleted text until
+rotation-based retention removes them; there is no immediate raw-log redaction.
+Raw references can point to files that have expired. Keep captures local.
+
+Reconnect uses bounded exponential equal jitter and an inclusive persisted cursor.
+The checkpoint is `RAW_DIR/checkpoint.json`, source-specific, atomically replaced
+and fsynced **after raw and enabled database writes succeed**. Corrupt or mismatched
+checkpoints fail closed. A new database requires explicit replay of available raw
+files; the checkpoint does not automatically rebuild downstream storage. Recovery
+depends on upstream lookback; a forced crash/disk failure can leave an unacknowledged
+partial final line or lose unpersisted messages. No exactly-once capture is claimed.
+Use one consumer per output directory and one integrated app process.
+
+Connection attempts time out after 10 seconds; socket close timeout is 5 seconds.
+Shutdown stops receipt and drains accepted events; duration depends on disk/DB
+health and queue depth. Exhausted DB retries fail ingestion and require a process
+restart/replay after recovery. Uvicorn may exit 143 after graceful SIGTERM cleanup;
+`application_stopped` logs confirm drained counts. No post payloads or source URLs
+are included in application error logs.
+
+## Tests and measured results
+
+```sh
+uv sync --locked
+uv run pytest -q
+uv run ruff check src tests migrations tools
+uv run ruff format --check src tests migrations tools
+
+# Optional PostgreSQL cases use fresh isolated schemas in this development DB.
+TEST_DATABASE_URL='postgresql+psycopg://bluesky:local-development-only@127.0.0.1:5432/bluesky' uv run pytest -q
+
+# Optional browser checks against an already running, labeled demo.
+npm ci
+npx playwright install chromium
+npm run test:ui
+```
+
+**Validated: 72 tests plus 32 original subtests with PostgreSQL enabled.** The default offline run passed 57 tests and skipped 15 PostgreSQL cases. Without
+`TEST_DATABASE_URL`, PostgreSQL-specific cases skip; the rest use temporary SQLite
+files, fixtures and fake WebSockets. No pytest case contacts live Bluesky or services outside the local test environment. UI checks require local Chromium and a running demo, and close
+their browser processes afterward.
+
+Coverage includes malformed/unknown events, reconnects, graceful shutdown, bounded
+queues/slow writes, fsync/disk failures, corrupt checkpoints, restart/replay,
+transient/exhausted DB retries, duplicate/concurrent delivery, out-of-order updates
+and deletes, assignment changes, baseline smoothing, low-volume suppression,
+synthetic ranking, API validation/pagination, deleted evidence exclusion, data
+retention, migration round trips and schema drift. Browser checks cover navigation,
+refresh, evidence pagination, chart/table, search, error recovery, missing topics,
+script-like source text and desktop/mobile fit. See [UI QA](docs/UI_QA.md).
+
+A live Compose smoke also tested a database outage, bounded backpressure, recovery,
+SIGTERM drain and inclusive checkpoint restart. The supplied CI workflow runs
+backend/PostgreSQL and browser checks; it was not executed remotely in this session.
+
+[Reproducible measurements](docs/BENCHMARKS.md) include throughput, queue/latency,
+CPU/RSS, raw and relation footprint growth, duplicate rate, reconnect recovery and
+synthetic detection-to-API latency. The final short PostgreSQL run persisted
+**194.2 deliveries/sec**, with 594 unique events from 654 deliveries; this is a
+small controlled fixture result, not sustained production capacity.
+
+## Limits and maintenance
+
+Coverage depends on upstream relay, filters, connectivity and retention. Missing
+windows and cold-start history are not proof of absent network activity. The
+latest completed window introduces up to five minutes of boundary wait, plus the
+15-second detector interval and backlog. Late updates/deletes rebuild only the
+recent analysis horizon. Candidate grouping is lexical and stop words are mostly
+English; unrelated events can share terms. Measure detection quality on more
+labeled scenarios before increasing scope.
+
+The detector deliberately fails visibly if its 100,000-post horizon budget is
+exceeded; adjust after measurement. Text retention does not cap database metadata,
+WAL or all disk growth. This is a single-machine MVP with no auth, multi-node
+coordination, embeddings, fact checking or production availability guarantee.
+
+`AGENTS.MD` requires keeping `PROJECT_CONTEXT.MD` current with changes and committing
+completed work. This workspace has normal Git history; temporary milestone-1 Git
+fallbacks are historical. Credentials, environments, captures and test caches are
+ignored. Next recommended work is a longer soak test and labeled quality evaluation,
+then tuning retention/horizon budgets from the measurements.
+
+Protocol references: [Jetstream](https://bsky.network/docs/jetstream/),
+[legacy event shapes](https://github.com/bluesky-social/jetstream-legacy),
+[websockets client](https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html).
