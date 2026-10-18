@@ -231,3 +231,20 @@ Lists validate limit/offset; the detector currently supports the configured
 window size only. Current rankings exclude stale completed windows; evidence
 and search always exclude deleted posts. Database failures return sanitized 503
 responses. The full server/dashboard launcher is the next implementation stage.
+
+## Dashboard runtime
+
+```sh
+uv sync --locked
+uv run bluesky-serve --demo
+```
+
+Open http://127.0.0.1:8000. Demo mode always uses a dedicated SQLite database at
+`data/demo.db`, resets its synthetic contents at startup and at window boundaries,
+and labels all screens. It never opens Bluesky. Live mode requires DATABASE_URL,
+applied migrations, and `uv run bluesky-serve`. The runtime ingests and detects in
+background tasks while serving the dashboard. `--api-only` disables live receipt.
+
+The local HTML/CSS/JS dashboard has no frontend build or external asset service.
+Optional UI checks: `npm ci`, `npx playwright install chromium`, then
+`npm run test:ui` while the demo is running. See docs/UI_QA.md.

@@ -23,8 +23,11 @@ testing each stage before advancing. Preserve the original printing demo.
    detail/timeline/evidence and literal text search, response models, pagination,
    input validation, sanitized database failures, no-store responses. Deleted
    posts are excluded even before the next detection pass.
-6. Next: integrated runtime and dashboard, then Compose/monitoring/failure
-   benchmarks and final documentation.
+6. Runtime/dashboard: complete. bluesky-serve combines ingestion, detector and
+   FastAPI. --demo uses separate SQLite synthetic data; --api-only serves existing
+   records. Responsive local HTML/CSS/JS overview, topic chart/evidence, search,
+   refresh and error states. No frontend build or external assets needed.
+7. Next: Compose, retention/operations, failure benchmarks and final documentation.
 
 ## Architecture and commands
 
@@ -65,7 +68,7 @@ other database clusters. Compose reproducibility will be added later.
 
 DATABASE_URL enables normalized database writes in the ingestion CLI; unset
 means raw-only capture. Apply migrations with DATABASE_URL=... uv run alembic
-upgrade head. No dashboard or integrated server runtime yet. SQLite is a local test
+upgrade head. The integrated runtime and dashboard are implemented. SQLite is a local test
 and offline demo adapter; PostgreSQL is the normal deployment database. No retention/redaction
 policy yet; raw logs can retain subsequently deleted text and rotation does not
 cap total disk growth. No performance/continuous capture guarantees claimed.
@@ -89,3 +92,17 @@ PostgreSQL fixtures. API checks include stale ranking exclusion, pagination,
 invalid inputs, missing topics, deletion exclusion, readiness, safe database
 errors and response models. The API serves only latest completed-window scores
 as current; older topic details explicitly report data_stale.
+
+Latest runtime/UI validation: 60 backend tests passed with PostgreSQL enabled.
+Standalone Playwright Chromium checks passed for desktop/mobile, navigation,
+refresh, evidence pagination, timeline table, search and empty results, failed
+request recovery, missing topic, API docs and script-like text rendering.
+Screenshots were visually inspected and selected synthetic-only screenshots
+are in docs/screenshots. No horizontal overflow on 390px viewport. Fixed UTC
+serialization and overlapping mobile chart labels. In-app Browser discovery was
+unavailable; standalone npm QA succeeds. npm is needed only for optional UI QA,
+not for running the app. See docs/UI_QA.md.
+
+Commands: uv run bluesky-serve --demo (localhost:8000); npm ci;
+npx playwright install chromium; npm run test:ui with the demo running.
+A local demo process is running on port 8000 for validation.

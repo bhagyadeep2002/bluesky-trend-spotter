@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -34,7 +36,9 @@ COVERAGE = "Observed public activity only. Coverage depends on upstream relay, f
 def metric_response(metric: WindowMetric, settings: Settings) -> MetricResponse:
     return MetricResponse(
         **{
-            name: getattr(metric, name)
+            name: utc(getattr(metric, name))
+            if isinstance(getattr(metric, name), datetime)
+            else getattr(metric, name)
             for name in MetricResponse.model_fields
             if name not in {"sample_sufficient", "persistence"}
         },
@@ -69,7 +73,7 @@ def post_response(post: Post) -> PostResponse:
         uri=post.uri,
         author_did=post.author_did,
         text=post.text or "",
-        created_at=post.created_at,
+        created_at=utc(post.created_at) if post.created_at else None,
         indexed_at=utc(post.indexed_at),
         language=post.language,
         original_url=original,
@@ -91,6 +95,16 @@ def create_app(
         title="Signal Watch — observed activity spikes", version="1.0.0", lifespan=lifespan
     )
     app.state.database, app.state.metrics, app.state.demo = database, metrics, demo
+    static = Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=static), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def dashboard():
+        return FileResponse(static / "index.html")
+
+    @app.get("/topics/{topic_id}", include_in_schema=False)
+    def topic_page(topic_id: int):
+        return FileResponse(static / "topic.html")
 
     @app.middleware("http")
     async def prevent_stale_post_cache(request: Request, call_next):
@@ -160,7 +174,7 @@ def create_app(
                 items=items,
                 window_start=start,
                 window_minutes=window_minutes,
-                last_updated=last,
+                last_updated=utc(last) if last else None,
                 demo=demo,
                 coverage_note=COVERAGE,
             )
