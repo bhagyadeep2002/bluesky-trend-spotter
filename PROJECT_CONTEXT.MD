@@ -12,8 +12,11 @@ testing each stage before advancing. Preserve the original printing demo.
 2. Durable checkpoint: complete. Atomic replace + fsync, source fingerprint,
    inclusive resume after persisted raw events. Corrupt/mismatched checkpoints
    fail closed. Replay never overwrites live checkpoints.
-3. Next: PostgreSQL models/migrations and idempotent current-state writes.
-4. Then deterministic candidates/aggregates/scoring, API, server-rendered
+3. PostgreSQL storage: complete. Eight migrated tables, unique event keys,
+   source-ordered current-state writes, cleared deletion text and tombstones,
+   bounded database retries. Raw fsync and database transaction precede checkpoints.
+4. Next: candidate extraction, five-minute aggregates and transparent spike scores.
+5. Then API, server-rendered
    dashboard, Compose, failure tests, real benchmarks, final documentation.
 
 ## Architecture and commands
@@ -25,8 +28,8 @@ Checkpoint is RAW_DIR/checkpoint.json. A consumer owns one output directory.
 
 Use uv and pyproject.toml; uv.lock now includes pytest, pytest-asyncio, httpx,
 ruff and psutil in the dev group. Existing unittest cases remain discoverable
-by pytest. requirements.lock is the older milestone-1 runtime lock and will be
-retired when the remaining runtime dependencies are added.
+by pytest. SQLAlchemy 2.0.55, Alembic 1.20.0 and psycopg 3.3.6 are pinned runtime
+dependencies. Retired the earlier requirements.lock; uv.lock is authoritative.
 
     uv sync --locked
     .venv/bin/python -m pytest -q
@@ -53,9 +56,15 @@ other database clusters. Compose reproducibility will be added later.
 
 ## Current limitations and decisions
 
-No normalized database, topic detector, dashboard or durable database delivery
-yet. Checkpoints currently acknowledge raw writes only; the next stage must
-advance them after downstream transactions succeed. No retention/redaction
+DATABASE_URL enables normalized database writes in the ingestion CLI; unset
+means raw-only capture. Apply migrations with DATABASE_URL=... uv run alembic
+upgrade head. No detector/dashboard/API for topics yet. SQLite is a local test
+and offline demo adapter; PostgreSQL is the normal deployment database. No retention/redaction
 policy yet; raw logs can retain subsequently deleted text and rotation does not
 cap total disk growth. No performance/continuous capture guarantees claimed.
 Prefer a server-rendered dashboard with local assets and no Node build chain.
+
+Latest validation: 43 tests passed (including actual PostgreSQL schema isolation,
+idempotency, out-of-order deletion protection, transient DB failure and raw
+recovery). PostgreSQL Alembic upgrade and check passed with no schema drift.
+Run integration tests with TEST_DATABASE_URL=postgresql+psycopg://bluesky@127.0.0.1:55432/bluesky_test uv run pytest -q.

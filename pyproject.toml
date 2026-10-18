@@ -7,7 +7,7 @@ name = "bluesky-early-warning"
 version = "0.1.0"
 description = "Reliable local Jetstream ingestion for an activity spike detector"
 requires-python = ">=3.14"
-dependencies = ["websockets==17.2", "fastapi==0.143.3", "uvicorn==0.54.0"]
+dependencies = ["websockets==17.2", "fastapi==0.143.3", "uvicorn==0.54.0", "sqlalchemy==2.0.55", "alembic==1.20.0", "psycopg[binary]==3.3.6"]
 
 [project.scripts]
 bluesky-ingest = "bluesky_ingest.cli:main"

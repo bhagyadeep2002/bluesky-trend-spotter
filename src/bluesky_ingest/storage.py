@@ -23,7 +23,7 @@ class RawWriter:
         self.size = 0
         self.opened_at = 0.0
 
-    def append(self, envelope: dict) -> None:
+    def append(self, envelope: dict) -> str:
         line = (json.dumps(envelope, ensure_ascii=True, separators=(",", ":")) + "\n").encode()
         now = self.clock()
         if self.file is None or self.size + len(line) > self.max_bytes or now - self.opened_at >= self.rotate_seconds:
@@ -38,10 +38,12 @@ class RawWriter:
                 os.fsync(fd)
             finally:
                 os.close(fd)
+        reference = f"{Path(self.file.name).name}:{self.size}"
         self.file.write(line)
         self.file.flush()
         os.fsync(self.file.fileno())
         self.size += len(line)
+        return reference
 
     def close(self) -> None:
         if self.file is not None:

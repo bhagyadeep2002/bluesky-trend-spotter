@@ -10,22 +10,26 @@ The reliable consumer is the `bluesky-ingest` command below.
 
 ## Setup
 
-Use Python 3.14 and uv. Runtime dependencies are pinned in `pyproject.toml` and
-the full dependency set in `requirements.lock` (resolved on Python 3.14/macOS).
-Initial installation needs package access or a populated uv cache.
+Use Python 3.14 and uv. Dependencies are pinned in pyproject.toml and uv.lock.
 
 ```sh
-uv venv --python 3.14
-uv pip install --python .venv/bin/python -r requirements.lock -e .
+uv sync --locked
+uv run pytest -q
 ```
 
-The editable build uses setuptools 84.0.0. To install from an already populated
-cache without network access:
+To enable normalized PostgreSQL writes, export DATABASE_URL and migrate first:
 
 ```sh
-uv pip install --offline --python .venv/bin/python -r requirements.lock setuptools==84.0.0
-uv pip install --offline --python .venv/bin/python --no-build-isolation --no-deps -e .
+export DATABASE_URL=postgresql+psycopg://bluesky:bluesky@127.0.0.1:5432/bluesky
+uv run alembic upgrade head
 ```
+
+Without DATABASE_URL the ingestion command captures raw events only.
+Database writes deduplicate event keys, order updates by source time/cursor,
+clear deleted text, and retain tombstones against stale replay. Checkpoints
+advance after both raw fsync and database commit. Database outages retry a
+bounded number of times, apply queue backpressure, then fail with raw data kept
+for replay. SQLite is supported for isolated tests and offline demos.
 
 ## Run locally
 
@@ -155,10 +159,9 @@ events, malformed payloads, stable duplicate keys, updates/deletes, reconnects,
 shutdown, slow writes and bounded queues, disk/fsync failures, size/time rotation,
 restart-safe file naming, raw replay, metrics, settings, and CLI exit behavior.
 
-The brief prefers pytest/pytest-asyncio. This milestone uses standard-library
-`unittest` and `IsolatedAsyncioTestCase` because those packages were unavailable
-in the local cache and the implementation environment blocked PyPI DNS access.
-No substitute test framework is vendored.
+The suite uses pytest and pytest-asyncio, including the original standard-library
+unittest cases. PostgreSQL integration cases run when TEST_DATABASE_URL is set;
+otherwise those cases skip and all other tests use isolated local SQLite files.
 
 Actual validation results and environment constraints are recorded in
 `PROJECT_CONTEXT.MD`. No throughput benchmark or continuous live-capture claim
@@ -167,9 +170,8 @@ is made from the small fixture run.
 ## Limits and next milestone
 
 Coverage depends on the upstream relay, filters, connectivity, and upstream
-retention. This consumer does not capture the entire network. It provides local
-raw ingestion only: no PostgreSQL, topic detector, current-post API, dashboard,
-or database readiness endpoint yet.
+retention. This consumer does not capture the entire network. It currently provides raw and optional normalized ingestion; the topic
+detector, topic API and dashboard are the next stages.
 
 A durable `RAW_DIR/checkpoint.json` resumes from the last acknowledged supported
 post cursor on restart. It is source-specific and replaced atomically after

@@ -10,6 +10,7 @@ from pathlib import Path
 import uvicorn
 
 from .config import Settings
+from .database import Database
 from .metrics import Metrics, create_app
 from .service import Consumer, log_event
 
@@ -34,7 +35,8 @@ async def launch(settings: Settings, replay: Path | None, limit: int, serve_metr
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
     metrics = Metrics()
-    consumer = Consumer(settings, metrics=metrics)
+    database = Database(settings.database_url) if settings.database_url else None
+    consumer = Consumer(settings, metrics=metrics, sink=database.apply if database else None)
     server = MetricsServer(uvicorn.Config(create_app(metrics), host=settings.metrics_host,
                                          port=settings.metrics_port, log_config=None, access_log=False))
     ingest_task = asyncio.create_task(consumer.run(stop, replay=replay, limit=limit))
@@ -63,6 +65,8 @@ async def launch(settings: Settings, replay: Path | None, limit: int, serve_metr
         log_event("final_metrics", **metrics.snapshot())
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.remove_signal_handler(sig)
+        if database:
+            database.dispose()
 
 
 def main() -> None:

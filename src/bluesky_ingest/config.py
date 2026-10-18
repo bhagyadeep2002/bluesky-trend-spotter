@@ -19,13 +19,16 @@ class Settings:
     backoff_max: float = 30
     metrics_host: str = "127.0.0.1"
     metrics_port: int = 8000
+    database_url: str = ""
+    database_retries: int = 5
+    database_retry_seconds: float = 1
 
     def __post_init__(self) -> None:
         url = urlsplit(self.jetstream_url)
         if url.scheme not in {"ws", "wss"} or not url.hostname or url.username or url.password:
             raise ValueError("JETSTREAM_URL must be a ws/wss URL without credentials")
         for name in ("queue_size", "max_message_bytes", "raw_max_bytes", "raw_rotate_seconds",
-                     "backoff_initial", "backoff_max", "metrics_port"):
+                     "backoff_initial", "backoff_max", "metrics_port", "database_retries", "database_retry_seconds"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")

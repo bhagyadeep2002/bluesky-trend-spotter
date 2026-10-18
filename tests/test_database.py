@@ -1,0 +1,75 @@
+import asyncio
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
+
+from bluesky_ingest.config import Settings
+from bluesky_ingest.events import parse_event
+from bluesky_ingest.models import Post, PostEventRecord
+from bluesky_ingest.service import Consumer
+
+FIXTURE = Path("tests/fixtures/events.jsonl")
+
+
+def test_migrations_and_idempotent_updates_deletes(database):
+    assert database.ready()
+    events = [parse_event(line) for line in FIXTURE.read_text().splitlines()[:3]]
+    now = datetime.now(UTC).isoformat()
+    assert database.apply(events[0], now)
+    assert not database.apply(events[0], now)
+    assert database.apply(events[1], now)
+    with Session(database.engine) as session:
+        assert session.get(Post, events[0].uri).text == events[1].text
+    assert database.apply(events[2], now)
+    assert not database.apply(events[0], now)
+    with Session(database.engine) as session:
+        post = session.get(Post, events[0].uri)
+        assert post.text is None and post.deleted_at is not None
+        assert session.scalar(select(func.count()).select_from(PostEventRecord)) == 3
+
+
+def test_delete_before_older_create_keeps_tombstone(database):
+    events = [parse_event(line) for line in FIXTURE.read_text().splitlines()[:3]]
+    now = datetime.now(UTC).isoformat()
+    database.apply(events[2], now)
+    assert not database.apply(events[0], now)
+    assert not database.apply(events[1], now)
+    with Session(database.engine) as session:
+        assert session.get(Post, events[0].uri).text is None
+
+
+async def test_database_retry_and_replay_do_not_inflate_counts(database, tmp_path):
+    calls = 0
+    def flaky_sink(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OperationalError("synthetic unavailable", {}, Exception())
+        return database.apply(*args)
+    settings = Settings(raw_dir=tmp_path / "raw", database_retry_seconds=0.001)
+    first = Consumer(settings, sink=flaky_sink)
+    await first.run(asyncio.Event(), replay=FIXTURE)
+    second = Consumer(settings, sink=database.apply)
+    await second.run(asyncio.Event(), replay=FIXTURE)
+    assert first.metrics.database_retries == 1
+    assert second.metrics.events_applied == 0
+    assert second.metrics.duplicate_or_stale_events == 4
+    with Session(database.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PostEventRecord)) == 4
+
+
+async def test_exhausted_database_retries_leave_raw_for_recovery(tmp_path):
+    def unavailable(*args):
+        raise OperationalError("synthetic unavailable", {}, Exception())
+    consumer = Consumer(Settings(raw_dir=tmp_path, database_retries=2,
+                                 database_retry_seconds=0.001), sink=unavailable)
+    with pytest.raises(OperationalError):
+        await consumer.run(asyncio.Event(), replay=FIXTURE)
+    assert consumer.cursor is None
+    assert not (tmp_path / "checkpoint.json").exists()
+    assert len(list(tmp_path.glob("events-*.jsonl"))) == 1
+    assert consumer.metrics.connection_state == "failed"

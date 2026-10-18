@@ -16,6 +16,7 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake
 from .config import Settings
 from .checkpoint import Checkpoint
 from .events import POST_COLLECTION, MalformedEvent, parse_event
+from sqlalchemy.exc import OperationalError
 from .metrics import Metrics
 from .storage import RawWriter, raw_fields, replay_messages
 
@@ -54,7 +55,7 @@ def backoff_delay(attempt: int, initial: float, maximum: float, jitter: float) -
 class Consumer:
     def __init__(self, settings: Settings, *, metrics: Metrics | None = None,
                  connector: Connector | None = None, writer: RawWriter | None = None,
-                 random_value: Callable[[], float] = random.random):
+                 random_value: Callable[[], float] = random.random, sink=None):
         self.settings = settings
         self.metrics = metrics if metrics is not None else Metrics()
         self.metrics.queue_capacity = settings.queue_size
@@ -66,6 +67,7 @@ class Consumer:
         self.cursor: int | None = None
         self.checkpoint = Checkpoint(settings.raw_dir, settings.jetstream_url)
         self.replaying = False
+        self.sink = sink
 
     def _connect(self, url: str):
         return connect(url, max_size=self.settings.max_message_bytes, max_queue=16,
@@ -157,7 +159,22 @@ class Consumer:
                             "disposition": disposition, **raw_fields(raw),
                             "post": post.to_dict() if post else None}
                 # One worker owns the writer; disk operations don't block HTTP or receipt.
-                await asyncio.to_thread(self.writer.append, envelope)
+                reference = await asyncio.to_thread(self.writer.append, envelope)
+                if post and self.sink:
+                    for attempt in range(self.settings.database_retries):
+                        try:
+                            changed = await asyncio.to_thread(self.sink, post, ingested_at, reference)
+                            self.metrics.events_applied += int(changed)
+                            self.metrics.duplicate_or_stale_events += int(not changed)
+                            break
+                        except OperationalError as exc:
+                            self.metrics.errors += 1
+                            self.metrics.last_error = type(exc).__name__
+                            self.metrics.database_retries += 1
+                            log_event("database_retry", attempt=attempt + 1)
+                            if attempt + 1 == self.settings.database_retries:
+                                raise
+                            await asyncio.sleep(self.settings.database_retry_seconds)
                 now = datetime.now(UTC)
                 self.metrics.events_persisted += 1
                 self.metrics.last_persisted_at = now.isoformat()

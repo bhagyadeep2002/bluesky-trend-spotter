@@ -12,6 +12,9 @@ class Metrics:
     connection_state: str = "starting"
     events_received: int = 0
     events_persisted: int = 0
+    events_applied: int = 0
+    duplicate_or_stale_events: int = 0
+    database_retries: int = 0
     valid_post_events: int = 0
     malformed_events: int = 0
     ignored_events: int = 0
