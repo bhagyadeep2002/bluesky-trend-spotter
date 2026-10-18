@@ -1,0 +1,6 @@
+{"did":"did:plc:fixture","time_us":1725911162329308,"kind":"commit","commit":{"rev":"rev1","operation":"create","collection":"app.bsky.feed.post","rkey":"post1","record":{"$type":"app.bsky.feed.post","text":"Hello  #Bluesky\nworld","langs":["en"],"createdAt":"2024-09-09T19:46:02.102Z"}}}
+{"did":"did:plc:fixture","time_us":1725911163329308,"kind":"commit","commit":{"rev":"rev2","operation":"update","collection":"app.bsky.feed.post","rkey":"post1","record":{"$type":"app.bsky.feed.post","text":"Updated #Bluesky","langs":["en"],"createdAt":"2024-09-09T19:46:02.102Z"}}}
+{"did":"did:plc:fixture","time_us":1725911164329308,"kind":"commit","commit":{"rev":"rev3","operation":"delete","collection":"app.bsky.feed.post","rkey":"post1"}}
+{"did":"did:plc:fixture","time_us":1725911165329308,"kind":"identity","identity":{"handle":"fixture.example"}}
+this is deliberately malformed JSON
+{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#commit","did":"did:plc:fixture","seq":123456,"time":"2026-10-18T12:00:00Z","operation":"create","collection":"app.bsky.feed.post","rkey":"post2","record":{"$type":"app.bsky.feed.post","text":"Synthetic v2 fixture","langs":["en"],"createdAt":"2026-10-18T12:00:00Z"}}}

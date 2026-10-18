@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+import math
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
+
+
+@dataclass(frozen=True)
+class Settings:
+    jetstream_url: str = "wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents"
+    raw_dir: Path = Path("data/raw")
+    queue_size: int = 256
+    max_message_bytes: int = 1_048_576
+    raw_max_bytes: int = 16_777_216
+    raw_rotate_seconds: float = 300
+    backoff_initial: float = 1
+    backoff_max: float = 30
+    metrics_host: str = "127.0.0.1"
+    metrics_port: int = 8000
+
+    def __post_init__(self) -> None:
+        url = urlsplit(self.jetstream_url)
+        if url.scheme not in {"ws", "wss"} or not url.hostname or url.username or url.password:
+            raise ValueError("JETSTREAM_URL must be a ws/wss URL without credentials")
+        for name in ("queue_size", "max_message_bytes", "raw_max_bytes", "raw_rotate_seconds",
+                     "backoff_initial", "backoff_max", "metrics_port"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if self.backoff_max < self.backoff_initial:
+            raise ValueError("BACKOFF_MAX must be at least BACKOFF_INITIAL")
+        if self.metrics_port > 65535:
+            raise ValueError("METRICS_PORT must be at most 65535")
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        defaults = cls()
+        values = {}
+        for name in cls.__dataclass_fields__:
+            if name.upper() in os.environ:
+                values[name] = type(getattr(defaults, name))(os.environ[name.upper()])
+        return cls(**values)
