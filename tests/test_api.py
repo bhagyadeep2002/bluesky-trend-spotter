@@ -16,6 +16,10 @@ from bluesky_ingest.synthetic import make_event
 async def test_api_ranking_pagination_validation_and_deleted_exclusion(database):
     now = datetime(2026, 10, 18, 12, 5, tzinfo=UTC)
     settings = Settings()
+    database.apply(
+        parse_event(make_event("#history", now - timedelta(minutes=65), "history")),
+        now.isoformat(),
+    )
     for i in range(12):
         database.apply(
             parse_event(
@@ -90,3 +94,21 @@ async def test_database_errors_are_sanitized(database, monkeypatch):
         response = await client.get("/readyz")
         assert response.status_code == 503
         assert "secret" not in response.text and "sensitive" not in response.text
+
+
+async def test_cold_start_api_explains_baseline_warmup(database):
+    now = datetime(2026, 10, 18, 12, 5, tzinfo=UTC)
+    for i in range(12):
+        database.apply(
+            parse_event(make_event("Trump", now - timedelta(minutes=2), str(i))), now.isoformat()
+        )
+    detect(database, Settings(), now)
+    app = create_app(database, Settings(), clock=lambda: now)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        data = (await client.get("/api/v1/topics/trending")).json()
+        assert data["items"] == []
+        assert data["baseline_ready"] is False
+        assert data["baseline_minutes_required"] == 60
+        assert data["retention_hours"] == 6

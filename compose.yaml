@@ -20,6 +20,8 @@ services:
       DATABASE_URL: postgresql+psycopg://bluesky:${POSTGRES_PASSWORD:-local-development-only}@db:5432/bluesky
       RAW_DIR: /app/data/raw
       METRICS_HOST: 0.0.0.0
+      POST_RETENTION_HOURS: ${POST_RETENTION_HOURS:-6}
+      RAW_RETENTION_HOURS: ${RAW_RETENTION_HOURS:-6}
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     volumes:

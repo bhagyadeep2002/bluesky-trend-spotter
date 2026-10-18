@@ -62,6 +62,7 @@ class Consumer:
         writer: RawWriter | None = None,
         random_value: Callable[[], float] = random.random,
         sink=None,
+        maintenance: Callable[[], None] | None = None,
     ):
         self.settings = settings
         self.metrics = metrics if metrics is not None else Metrics()
@@ -84,6 +85,7 @@ class Consumer:
         self.checkpoint = Checkpoint(settings.raw_dir, settings.jetstream_url)
         self.replaying = False
         self.sink = sink
+        self.maintenance = maintenance
 
     def _connect(self, url: str):
         return connect(
@@ -175,7 +177,13 @@ class Consumer:
 
     async def _persist(self) -> None:
         while True:
-            item = await self.queue.get()
+            try:
+                item = await asyncio.wait_for(self.queue.get(), timeout=60)
+            except TimeoutError:
+                await asyncio.to_thread(self.writer.maintain)
+                if self.maintenance:
+                    await asyncio.to_thread(self.maintenance)
+                continue
             self.metrics.queue_depth = self.queue.qsize()
             try:
                 if item is None:

@@ -42,10 +42,10 @@ async function pipeline() {
 async function overview() {
   const data = await endpoint("/api/v1/topics/trending");
   demoMode(data.demo); $("topic-count").textContent = data.items.length;
-  $("window-label").textContent = `Latest completed ${data.window_minutes}-minute window · ${time(data.window_start)}`;
+  $("window-label").textContent = `Latest completed ${data.window_minutes}-minute window · ${time(data.window_start)} · keeping ${data.retention_hours} hours of posts`;
   $("updated").textContent = `Last detected ${time(data.last_updated)}`;
   const table = $("topics"); table.replaceChildren();
-  if (!data.items.length) { const row = node("tr"); const cell = node("td", "No qualifying spikes in the latest completed window. The pipeline may still be building its baseline.", "empty"); cell.colSpan = 5; row.append(cell); table.append(row); }
+  if (!data.items.length) { const row = node("tr"); const cell = node("td", data.baseline_ready ? "No qualifying spikes in the latest completed window." : `Building the ${data.baseline_minutes_required}-minute baseline. Rankings appear after enough source history has been observed.`, "empty"); cell.colSpan = 5; row.append(cell); table.append(row); }
   data.items.forEach(({topic, metric}) => {
     const row = node("tr"); const cell = node("td"); const link = node("a", topic.label, "topic-link"); link.href = `/topics/${topic.id}`;
     cell.append(link, node("span", metric.persistence, "topic-sub")); row.append(cell, node("td", number(metric.post_count)), node("td", number(metric.baseline_expected_count, 1)));
@@ -88,8 +88,8 @@ async function detail() {
   if (m) {
     $("explanation").textContent = m.explanation; $("updated").textContent = `Detected ${time(m.detected_at)}`;
     $("current-count").textContent = number(m.post_count); $("baseline").textContent = number(m.baseline_expected_count, 1);
-    $("growth").textContent = `${number(m.rate_ratio, 1)}×`; $("increase").textContent = `Absolute increase: ${number(m.absolute_increase, 1)}`;
-    $("persistence").textContent = m.persistence; $("sample-label").textContent = m.sample_sufficient ? `Completed ${m.window_minutes}-minute window` : "Sample too small for a signal";
+    $("growth").textContent = m.score_components.baseline_ready === false ? "—" : `${number(m.rate_ratio, 1)}×`; $("increase").textContent = `Absolute increase: ${number(m.absolute_increase, 1)}`;
+    $("persistence").textContent = m.persistence; $("sample-label").textContent = m.score_components.baseline_ready === false ? "Building baseline history" : m.sample_sufficient ? `Completed ${m.window_minutes}-minute window` : "Sample too small for a signal";
     const components = $("score-components"); components.replaceChildren();
     const c = m.score_components;
     [["Spike score", number(m.spike_score, 1)], ["Smoothing α", c.alpha], ["Baseline floor", c.baseline_floor], ["Minimum volume", c.min_current_count], ["Minimum growth", `${c.min_rate_ratio}×`], ["Consecutive windows", c.consecutive_spike_windows || 0]].forEach(([label, value]) => { const row = node("div"); row.append(node("dt", label), node("dd", String(value))); components.append(row); });

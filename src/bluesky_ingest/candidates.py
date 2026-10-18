@@ -16,7 +16,18 @@ today together tomorrow very want well were what when where which while white
 with without world would your yours yourself https http www com post posts
 bluesky bsky social share shared follow following please thanks thank right
 will you are the and for not but all can our out how was has had its his her
-who why new now get too see one two don dont cant im ive its youre thats""".split()
+who why new now get too see one two don dont cant im ive its youre thats
+three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen
+sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy
+eighty ninety hundred hundreds thousand thousands million millions billion
+billions trillion trillions zero digit digits number numbers word words
+love back come comes came coming take takes took taken taking give gives given
+getting got going went gone lets let away ever someone somebody anybody nobody
+nothing things makes made making feel feels feeling thought thoughts sure maybe
+actually literally pretty probably already almost enough little lots better best
+last next once twice said say saying seen seeing tell told long much still
+happy nice beautiful amazing awesome yes yeah okay true via use used using
+each either neither own ours theirs themselves himself herself myself itself""".split()
 )
 
 

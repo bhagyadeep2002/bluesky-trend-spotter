@@ -55,6 +55,9 @@ class TrendingResponse(BaseModel):
     last_updated: datetime | None
     demo: bool
     coverage_note: str
+    baseline_ready: bool
+    baseline_minutes_required: int
+    retention_hours: float
 
 
 class TopicDetail(BaseModel):

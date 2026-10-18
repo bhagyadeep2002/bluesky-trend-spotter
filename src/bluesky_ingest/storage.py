@@ -19,7 +19,7 @@ class RawWriter:
         max_bytes: int,
         rotate_seconds: float,
         clock: Callable[[], float] = time.monotonic,
-        retention_seconds: float = 86_400,
+        retention_seconds: float = 21_600,
         budget_bytes: int = 1_073_741_824,
     ):
         self.directory = directory
@@ -59,12 +59,20 @@ class RawWriter:
         self.size += len(line)
         return reference
 
+    def maintain(self) -> None:
+        # Called by the single persistence worker, including during quiet periods.
+        if self.file and self.clock() - self.opened_at >= self.rotate_seconds:
+            self.close()
+        self.prune()
+
     def prune(self, reserve: int = 0) -> None:
         if reserve > self.budget_bytes:
             raise OSError("raw envelope exceeds disk budget")
         files = sorted(self.directory.glob("events-*.jsonl"), key=lambda path: path.stat().st_mtime)
         total = sum(path.stat().st_size for path in files)
         for path in files:
+            if self.file and path == Path(self.file.name):
+                continue
             if (
                 time.time() - path.stat().st_mtime > self.retention_seconds
                 or total + reserve > self.budget_bytes

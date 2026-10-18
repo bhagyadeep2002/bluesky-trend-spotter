@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from .candidates import STOP
 from .config import Settings
 from .database import Database, utc
 from .models import Assignment, DetectionRun, Post, PostEventRecord, Topic, WindowMetric
@@ -16,12 +17,23 @@ def floor_window(value: datetime, minutes: int) -> datetime:
     return datetime.fromtimestamp(int(utc(value).timestamp()) // seconds * seconds, UTC)
 
 
-def score_window(count: int, baseline_counts: list[int], settings: Settings) -> dict:
+def history_ready(session: Session, start: datetime, settings: Settings) -> bool:
+    # This measures observed source history, not complete network coverage.
+    first = session.scalar(select(func.min(PostEventRecord.source_time)))
+    return first is not None and floor_window(first, settings.window_minutes) <= (
+        start - timedelta(minutes=settings.window_minutes * settings.baseline_windows)
+    )
+
+
+def score_window(
+    count: int, baseline_counts: list[int], settings: Settings, *, baseline_ready: bool = True
+) -> dict:
     baseline = sum(baseline_counts) / len(baseline_counts) if baseline_counts else 0.0
     increase = count - baseline
     ratio = (count + settings.alpha) / (max(baseline, settings.baseline_floor) + settings.alpha)
     eligible = (
-        count >= settings.min_current_count
+        baseline_ready
+        and count >= settings.min_current_count
         and increase >= settings.min_absolute_increase
         and ratio >= settings.min_rate_ratio
     )
@@ -39,9 +51,14 @@ def score_window(count: int, baseline_counts: list[int], settings: Settings) -> 
             "min_rate_ratio": settings.min_rate_ratio,
             "baseline_counts": baseline_counts,
             "eligible": eligible,
+            "baseline_ready": baseline_ready,
             "formula": "max(0, absolute_increase) * log2(rate_ratio)",
         },
-        "explanation": f"Activity rose from an estimated {baseline:g} posts per {settings.window_minutes} minutes to {count} in the latest completed window.",
+        "explanation": (
+            f"Activity rose from an estimated {baseline:g} posts per {settings.window_minutes} minutes to {count} in the latest completed window."
+            if baseline_ready
+            else "Building observed baseline history; spike ranking is withheld until enough history is available."
+        ),
     }
 
 
@@ -66,6 +83,14 @@ def detect(database: Database, settings: Settings, now: datetime | None = None) 
     try:
         with Session(database.engine) as session, session.begin():
             database.lock(session)
+            # Remove previously extracted fillers too when upgrading existing data.
+            session.execute(
+                delete(Topic).where(Topic.normalized_key.in_(["term:" + term for term in STOP]))
+            )
+            first_source = session.scalar(select(func.min(PostEventRecord.source_time)))
+            first_window = (
+                floor_window(first_source, settings.window_minutes) if first_source else None
+            )
             post_count = session.scalar(
                 select(func.count())
                 .select_from(Post)
@@ -108,7 +133,15 @@ def detect(database: Database, settings: Settings, now: datetime | None = None) 
                         for n in range(1, settings.baseline_windows + 1)
                     ]
                     count = windows.get(start, 0)
-                    result = score_window(count, history, settings)
+                    result = score_window(
+                        count,
+                        history,
+                        settings,
+                        baseline_ready=(
+                            first_window is not None
+                            and first_window <= start - width * settings.baseline_windows
+                        ),
+                    )
                     persistence = persistence + 1 if result["spike_score"] > 0 else 0
                     result["score_components"]["consecutive_spike_windows"] = persistence
                     session.add(

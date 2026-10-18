@@ -22,6 +22,12 @@ class Base(DeclarativeBase):
     pass
 
 
+class RetentionState(Base):
+    __tablename__ = "retention_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Post(Base):
     __tablename__ = "posts"
     uri: Mapped[str] = mapped_column(Text, primary_key=True)

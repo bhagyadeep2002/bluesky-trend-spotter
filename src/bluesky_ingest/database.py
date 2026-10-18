@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from .candidates import extract_candidates
 from .events import PostEvent
-from .models import Assignment, Post, PostEventRecord, Topic, TopicTerm
+from .models import Assignment, Post, PostEventRecord, RetentionState, Topic, TopicTerm
 
 
 def utc(value: datetime) -> datetime:
@@ -38,7 +38,7 @@ class Database:
         with self.engine.connect() as connection:
             connection.execute(text("SELECT 1 FROM posts LIMIT 1"))
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            return version == "0002"
+            return version == "0003"
 
     def migrate(self) -> None:
         from alembic import command
@@ -62,6 +62,16 @@ class Database:
         source = datetime.fromisoformat(post.source_time) if post.source_time else received
         with Session(self.engine) as session, session.begin():
             self.lock(session)
+            state = session.get(RetentionState, 1)
+            if state and (
+                utc(source) < utc(state.cutoff)
+                or (
+                    post.operation != "delete"
+                    and post.created_at
+                    and utc(datetime.fromisoformat(post.created_at)) < utc(state.cutoff)
+                )
+            ):
+                return False
             inserted = session.execute(
                 self.insert(PostEventRecord)
                 .values(

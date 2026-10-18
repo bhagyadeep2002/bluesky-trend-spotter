@@ -226,3 +226,42 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         await c2.run(asyncio.Event(), replay=next(first.glob("*.jsonl")))
         assert [r["raw"] for r in rows(first)] == [r["raw"] for r in rows(second)]
         assert [r["post"] for r in rows(first)] == [r["post"] for r in rows(second)]
+
+
+class IdleMaintenanceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_idle_worker_runs_raw_and_database_cleanup(self):
+        from unittest.mock import Mock, patch
+
+        writer, maintenance = Mock(), Mock()
+        consumer = Consumer(Settings(), writer=writer, maintenance=maintenance)
+        await consumer.queue.put(None)
+        first = True
+
+        async def timeout_then_get(awaitable, timeout):
+            nonlocal first
+            if first:
+                first = False
+                awaitable.close()
+                raise TimeoutError
+            return await awaitable
+
+        with patch("bluesky_ingest.service.asyncio.wait_for", timeout_then_get):
+            await consumer._persist()
+        writer.maintain.assert_called_once_with()
+        maintenance.assert_called_once_with()
+        assert consumer.queue._unfinished_tasks == 0
+
+    async def test_idle_cleanup_failure_is_not_swallowed(self):
+        from unittest.mock import Mock, patch
+
+        writer = Mock()
+        writer.maintain.side_effect = OSError("synthetic disk failure")
+        consumer = Consumer(Settings(), writer=writer)
+
+        async def timeout(awaitable, timeout):
+            awaitable.close()
+            raise TimeoutError
+
+        with patch("bluesky_ingest.service.asyncio.wait_for", timeout):
+            with self.assertRaises(OSError):
+                await consumer._persist()

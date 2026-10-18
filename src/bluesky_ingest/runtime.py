@@ -18,7 +18,7 @@ from .api import create_app
 from .config import Settings
 from .database import Database
 from .detection import detect, floor_window
-from .maintenance import maintain
+from .maintenance import RetainedSink, maintain
 from .metrics import Metrics
 from .models import Assignment, DetectionRun, Post, PostEventRecord, Topic, TopicTerm, WindowMetric
 from .service import Consumer, log_event
@@ -78,10 +78,10 @@ def application(settings: Settings, *, demo: bool = False, stream: bool = True):
 
         async def detector():
             demo_boundary = floor_window(datetime.now(UTC), settings.window_minutes)
-            last_maintenance = -3600.0
+            last_maintenance = -60.0
             while not stop.is_set():
                 try:
-                    if time.monotonic() - last_maintenance >= 3600:
+                    if time.monotonic() - last_maintenance >= 60:
                         await asyncio.to_thread(maintain, database, settings)
                         last_maintenance = time.monotonic()
                     boundary = floor_window(datetime.now(UTC), settings.window_minutes)
@@ -102,7 +102,7 @@ def application(settings: Settings, *, demo: bool = False, stream: bool = True):
         ingest_task = None
         if stream and not demo:
             ingest_task = asyncio.create_task(
-                Consumer(settings, metrics=metrics, sink=database.apply).run(stop)
+                Consumer(settings, metrics=metrics, sink=RetainedSink(database, settings)).run(stop)
             )
 
             def ingestion_done(task):

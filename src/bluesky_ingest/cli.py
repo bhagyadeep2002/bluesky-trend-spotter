@@ -11,6 +11,7 @@ import uvicorn
 
 from .config import Settings
 from .database import Database
+from .maintenance import RetainedSink
 from .metrics import Metrics, create_app
 from .service import Consumer, log_event
 
@@ -36,7 +37,10 @@ async def launch(settings: Settings, replay: Path | None, limit: int, serve_metr
         loop.add_signal_handler(sig, stop.set)
     metrics = Metrics()
     database = Database(settings.database_url) if settings.database_url else None
-    consumer = Consumer(settings, metrics=metrics, sink=database.apply if database else None)
+    sink = RetainedSink(database, settings) if database else None
+    consumer = Consumer(
+        settings, metrics=metrics, sink=sink, maintenance=sink.maintain if sink else None
+    )
     server = MetricsServer(
         uvicorn.Config(
             create_app(metrics),

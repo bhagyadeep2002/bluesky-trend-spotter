@@ -34,9 +34,9 @@ class Settings:
     candidate_min_frequency: int = 3
     detect_interval_seconds: float = 15
     analysis_max_posts: int = 100_000
-    raw_retention_hours: float = 24
+    raw_retention_hours: float = 6
     raw_budget_bytes: int = 1_073_741_824
-    post_retention_hours: float = 48
+    post_retention_hours: float = 6
 
     def __post_init__(self) -> None:
         url = urlsplit(self.jetstream_url)

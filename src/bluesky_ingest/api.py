@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .database import Database, utc
-from .detection import floor_window
+from .detection import floor_window, history_ready
 from .metrics import Metrics
 from .models import Assignment, DetectionRun, Post, Topic, TopicTerm, WindowMetric
 from .schemas import (
@@ -180,6 +180,7 @@ def create_app(
             raise HTTPException(422, "Requested window does not match the configured detector")
         start = floor_window(now(), window_minutes) - timedelta(minutes=window_minutes)
         with Session(database.engine) as session:
+            baseline_ready = history_ready(session, start, settings)
             rows = session.execute(
                 select(Topic, WindowMetric)
                 .join(WindowMetric)
@@ -202,12 +203,15 @@ def create_app(
                 select(func.max(DetectionRun.finished_at)).where(DetectionRun.status == "success")
             )
             return TrendingResponse(
-                items=items,
+                items=items if baseline_ready else [],
                 window_start=start,
                 window_minutes=window_minutes,
                 last_updated=utc(last) if last else None,
                 demo=demo,
                 coverage_note=COVERAGE,
+                baseline_ready=baseline_ready,
+                baseline_minutes_required=settings.window_minutes * settings.baseline_windows,
+                retention_hours=settings.post_retention_hours,
             )
 
     @app.get("/api/v1/topics/{topic_id}", response_model=TopicDetail)

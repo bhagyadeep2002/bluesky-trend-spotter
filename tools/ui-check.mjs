@@ -57,6 +57,14 @@ export async function checkUI(browser, base = "http://127.0.0.1:8000", directory
   await page.unroute("**/api/v1/topics/trending");
   await page.getByRole("button", { name: /Refresh/ }).click();
   await page.locator("#error").waitFor({state: "hidden"});
+  await page.route("**/api/v1/topics/trending", async route => {
+    const response = await route.fetch(); const data = await response.json();
+    await route.fulfill({response, json: {...data, items: [], baseline_ready: false}});
+  });
+  await page.getByRole("button", {name: /Refresh/}).click();
+  await page.getByText(/Building the 60-minute baseline/).waitFor();
+  assert.match(await page.locator("#window-label").innerText(), /keeping 6 hours/);
+  await page.unroute("**/api/v1/topics/trending");
   await page.goto(`${base}/topics/999999`);
   await page.getByText("This topic could not be found.", { exact: true }).waitFor();
   await page.getByRole("link", { name: "← Back to overview" }).click();
@@ -76,7 +84,7 @@ export async function checkUI(browser, base = "http://127.0.0.1:8000", directory
   await phone.screenshot({path: `${directory}/mobile-topic-viewport.png`});
   assert.deepEqual(errors, []);
   await mobile.close(); await context.close();
-  return "UI passed: overview, detail, refresh, evidence pagination, timeline table, search, empty/error recovery, missing topic, API docs, XSS text rendering, desktop/mobile fit.";
+  return "UI passed: overview, detail, refresh, evidence pagination, timeline table, search, empty/error recovery, baseline warmup, retention label, missing topic, API docs, XSS text rendering, desktop/mobile fit.";
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -9,6 +9,8 @@ the ranked list and evidence remain reachable through normal page scrolling.
 | --- | --- | --- |
 | Demo is explicit | Visible demo banner and pipeline mode | Desktop overview and mobile |
 | Rankings use actual application data | Aurora shows 24 posts, 4 baseline and 4.3× growth | Overview |
+| Warmup explains withheld rankings | Mock insufficient observed history; show 60-minute baseline message | Browser assertion |
+| Rolling retention is visible | Overview shows keeping 6 hours of posts | Desktop/mobile assertion and screenshot |
 | Refresh updates the view | Click Refresh and wait for response | Overview after click |
 | Topic link exposes evidence | Click #aurora, inspect count, timeline and terms | Topic detail |
 | Timeline is readable and accessible | Chart present, expand data table | Detail and mobile |
@@ -36,3 +38,9 @@ found in the reviewed final states. The app intentionally scrolls vertically.
 Browser contexts/processes are closed by the QA script. Selected synthetic-only
 screenshots are in docs/screenshots. Optional live user-content screenshots are
 excluded. Native desktop window geometry is irrelevant to this web dashboard.
+
+Six-hour retention update: standalone Chromium checks rerun successfully on
+2026-10-18, including the new warmup empty state and retention label. Updated
+mobile viewport reviewed at 390×844 with no horizontal overflow. Committed
+screenshots above illustrate the earlier MVP layout; current QA images remain
+in ignored test-results/.

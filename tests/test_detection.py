@@ -91,3 +91,50 @@ def test_analysis_budget_failure_is_recorded(database):
     with Session(database.engine) as session:
         run = session.scalar(select(DetectionRun))
         assert run.status == "failed" and run.error_summary == "RuntimeError"
+
+
+def test_filler_words_filtered_but_meaningful_candidates_remain():
+    text = "three million words hundred eighty thousand digit love back Trump Ukraine earthquake #Love https://science.example/news"
+    keys = {candidate.key for candidate in extract_candidates(text)}
+    assert keys == {
+        "term:trump",
+        "term:ukraine",
+        "term:earthquake",
+        "hashtag:love",
+        "domain:science.example",
+    }
+
+
+def test_cold_start_withholds_spikes_until_observed_history_exists(database):
+    now = datetime(2026, 10, 18, 12, 5, tzinfo=UTC)
+    for i in range(12):
+        database.apply(
+            parse_event(make_event("#aurora Trump", now - timedelta(minutes=2), str(i))),
+            now.isoformat(),
+        )
+    # Simulate a filler candidate extracted by an earlier application version.
+    with Session(database.engine) as session, session.begin():
+        session.add(
+            Topic(
+                label="million",
+                normalized_key="term:million",
+                created_at=now,
+                last_seen_at=now,
+                active=True,
+            )
+        )
+    detect(database, Settings(), now)
+    with Session(database.engine) as session:
+        assert session.scalar(select(Topic).where(Topic.normalized_key == "term:million")) is None
+        metrics = list(session.scalars(select(WindowMetric)))
+        assert metrics and all(metric.spike_score == 0 for metric in metrics)
+        assert all(not metric.score_components["baseline_ready"] for metric in metrics)
+    # A genuinely new topic may have zero baseline once global history exists.
+    database.apply(
+        parse_event(make_event("#history", now - timedelta(minutes=65), "history")), now.isoformat()
+    )
+    detect(database, Settings(), now)
+    with Session(database.engine) as session:
+        metric = session.scalar(select(WindowMetric).where(WindowMetric.spike_score > 0))
+        assert metric is not None and metric.baseline_expected_count == 0
+        assert metric.score_components["baseline_ready"]
