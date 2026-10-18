@@ -221,3 +221,13 @@ A topic starting from absent history can be detected after enough absolute
 volume; the model cannot establish network-wide coverage or truth/importance.
 Only completed windows are scored; boundary wait can be five minutes. The next
 stage exposes these data through the topic API.
+
+## Topic API
+
+The FastAPI application in bluesky_ingest.api exposes /healthz, /readyz,
+/api/v1/pipeline/status, /api/v1/topics/trending, /api/v1/topics/{id},
+/api/v1/topics/{id}/posts, /api/v1/topics/{id}/timeline and /api/v1/search?q=... .
+Lists validate limit/offset; the detector currently supports the configured
+window size only. Current rankings exclude stale completed windows; evidence
+and search always exclude deleted posts. Database failures return sanitized 503
+responses. The full server/dashboard launcher is the next implementation stage.

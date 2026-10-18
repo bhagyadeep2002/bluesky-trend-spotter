@@ -19,8 +19,12 @@ testing each stage before advancing. Preserve the original printing demo.
    per post), stop-word filtering, configurable minimum frequency, zero-filled
    five-minute windows, 12 prior-window baseline, smoothed ratio, absolute/volume
    gates, transparent scores, consecutive-window persistence and run records.
-5. Next: topic/search/health API, then server-rendered
-   dashboard, Compose, failure tests, real benchmarks, final documentation.
+5. API: complete. Health/readiness, pipeline status, ranked spikes, topic
+   detail/timeline/evidence and literal text search, response models, pagination,
+   input validation, sanitized database failures, no-store responses. Deleted
+   posts are excluded even before the next detection pass.
+6. Next: integrated runtime and dashboard, then Compose/monitoring/failure
+   benchmarks and final documentation.
 
 ## Architecture and commands
 
@@ -61,13 +65,13 @@ other database clusters. Compose reproducibility will be added later.
 
 DATABASE_URL enables normalized database writes in the ingestion CLI; unset
 means raw-only capture. Apply migrations with DATABASE_URL=... uv run alembic
-upgrade head. No dashboard/API for topics yet. SQLite is a local test
+upgrade head. No dashboard or integrated server runtime yet. SQLite is a local test
 and offline demo adapter; PostgreSQL is the normal deployment database. No retention/redaction
 policy yet; raw logs can retain subsequently deleted text and rotation does not
 cap total disk growth. No performance/continuous capture guarantees claimed.
 Prefer a server-rendered dashboard with local assets and no Node build chain.
 
-Latest validation: 43 tests passed (including actual PostgreSQL schema isolation,
+Storage-stage validation: 43 tests passed (including actual PostgreSQL schema isolation,
 idempotency, out-of-order deletion protection, transient DB failure and raw
 recovery). PostgreSQL Alembic upgrade and check passed with no schema drift.
 Run integration tests with TEST_DATABASE_URL=postgresql+psycopg://bluesky@127.0.0.1:55432/bluesky_test uv run pytest -q.
@@ -79,3 +83,9 @@ and current scores. Tests passed on SQLite and PostgreSQL; Ruff checks pass.
 Windows score the latest completed interval; maximum expected boundary wait is
 five minutes plus detector interval. Missing history is represented by zeros,
 so baseline warmup and incomplete coverage remain documented limitations.
+
+Latest validation: 55 tests passed, 32 original subtests, with both SQLite and
+PostgreSQL fixtures. API checks include stale ranking exclusion, pagination,
+invalid inputs, missing topics, deletion exclusion, readiness, safe database
+errors and response models. The API serves only latest completed-window scores
+as current; older topic details explicitly report data_stale.

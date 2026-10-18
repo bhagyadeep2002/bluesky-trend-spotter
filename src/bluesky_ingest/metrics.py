@@ -27,6 +27,9 @@ class Metrics:
     source_lag_seconds: float | None = None
     processing_lag_seconds: float | None = None
     last_error: str | None = None
+    last_detection_at: str | None = None
+    detection_error: str | None = None
+    topics_evaluated: int = 0
     started: float = field(default_factory=time.monotonic, repr=False)
 
     def snapshot(self) -> dict:
