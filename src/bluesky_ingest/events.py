@@ -87,7 +87,11 @@ def parse_event(raw: str | bytes) -> PostEvent | None:
     }:
         return None
     did, rkey = body.get("did"), commit.get("rkey")
-    if not isinstance(did, str) or not re.fullmatch(r"did:[a-z0-9]+:[A-Za-z0-9._:%-]+", did):
+    if (
+        not isinstance(did, str)
+        or len(did) > 1024
+        or not re.fullmatch(r"did:[a-z0-9]+:[A-Za-z0-9._:%-]+", did)
+    ):
         raise MalformedEvent("invalid repository DID")
     if (
         not isinstance(rkey, str)
@@ -96,7 +100,7 @@ def parse_event(raw: str | bytes) -> PostEvent | None:
     ):
         raise MalformedEvent("invalid record key")
     cursor = body.get("seq" if v2 else "time_us")
-    if cursor is not None and (type(cursor) is not int or cursor < 0):
+    if cursor is not None and (type(cursor) is not int or not 0 <= cursor <= 2**63 - 1):
         raise MalformedEvent("invalid cursor")
     source_time = None
     if v2 and body.get("time") is not None:
@@ -114,9 +118,19 @@ def parse_event(raw: str | bytes) -> PostEvent | None:
         if record.get("$type", POST_COLLECTION) != POST_COLLECTION:
             raise MalformedEvent("unexpected record type")
         text = record["text"]
+        try:
+            text.encode("utf-8")
+        except UnicodeError as exc:
+            raise MalformedEvent("invalid text encoding") from exc
+        if "\x00" in text:
+            raise MalformedEvent("post text contains NUL")
         created_at = timestamp(record["createdAt"]) if "createdAt" in record else None
         languages = record.get("langs", [])
-        if not isinstance(languages, list) or any(not isinstance(lang, str) for lang in languages):
+        if (
+            not isinstance(languages, list)
+            or len(languages) > 10
+            or any(not isinstance(lang, str) or len(lang) > 64 for lang in languages)
+        ):
             raise MalformedEvent("invalid languages")
     # Canonical source event digest: stable on duplicate delivery, no retained text in key.
     digest = hashlib.sha256(

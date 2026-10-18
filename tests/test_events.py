@@ -83,6 +83,13 @@ class SyncTests(unittest.TestCase):
                 with self.assertRaises(MalformedEvent):
                     parse_event(json.dumps(create_event))
 
+    def test_unstorable_text_is_malformed(self):
+        for text in ["null\x00byte", "surrogate\ud800"]:
+            event = json.loads(self.messages[0])
+            event["commit"]["record"]["text"] = text
+            with self.assertRaises(MalformedEvent):
+                parse_event(json.dumps(event))
+
     def test_unknown_kind(self):
         for raw in ['{"kind":"future_kind"}', '{"$type":"message","payload":{"$type":"future"}}']:
             with self.subTest(raw=raw):

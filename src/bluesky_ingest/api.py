@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -139,6 +139,37 @@ def create_app(
     @app.get("/api/v1/pipeline/status", response_model=PipelineResponse)
     def pipeline_status():
         return {**metrics.snapshot(), "mode": "demo" if demo else "live"}
+
+    @app.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
+    def prometheus_metrics():
+        values = metrics.snapshot()
+        keys = {
+            "events_received": "counter",
+            "events_persisted": "counter",
+            "events_applied": "counter",
+            "malformed_events": "counter",
+            "errors": "counter",
+            "retries": "counter",
+            "database_retries": "counter",
+            "queue_depth": "gauge",
+            "queue_capacity": "gauge",
+            "processing_lag_seconds": "gauge",
+            "source_lag_seconds": "gauge",
+            "latency_p50_seconds": "gauge",
+            "latency_p95_seconds": "gauge",
+        }
+        lines = []
+        for key, kind in keys.items():
+            if values[key] is not None:
+                name = f"bluesky_{key}" + ("_total" if kind == "counter" else "")
+                lines.extend([f"# TYPE {name} {kind}", f"{name} {values[key]}"])
+        lines.extend(
+            [
+                "# TYPE bluesky_connected gauge",
+                f"bluesky_connected {int(metrics.connection_state == 'connected')}",
+            ]
+        )
+        return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
     @app.get("/api/v1/topics/trending", response_model=TrendingResponse)
     def trending(

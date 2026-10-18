@@ -30,15 +30,22 @@ class Metrics:
     last_detection_at: str | None = None
     detection_error: str | None = None
     topics_evaluated: int = 0
+    processing_latencies: list[float] = field(default_factory=list, repr=False)
     started: float = field(default_factory=time.monotonic, repr=False)
 
     def snapshot(self) -> dict:
         result = asdict(self)
         elapsed = max(time.monotonic() - result.pop("started"), 0.001)
+        samples = sorted(result.pop("processing_latencies"))
         result.update(
             uptime_seconds=elapsed,
             events_per_second=self.events_received / elapsed,
             persisted_per_second=self.events_persisted / elapsed,
+            latency_p50_seconds=samples[len(samples) // 2] if samples else None,
+            latency_p95_seconds=samples[min(len(samples) - 1, int(len(samples) * 0.95))]
+            if samples
+            else None,
+            latency_sample_count=len(samples),
         )
         return result
 

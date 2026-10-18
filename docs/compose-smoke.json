@@ -1,0 +1,13 @@
+{
+  "live_smoke": "passed",
+  "readiness_during_outage": 503,
+  "database_retry_increase": 1,
+  "queue_depth_during_outage": 256,
+  "queue_capacity": 256,
+  "outage_to_ready_and_progress_seconds": 0.7915824579995387,
+  "graceful_container_exit_code": 143,
+  "drained_received": 278,
+  "drained_persisted": 278,
+  "restart_duplicate_deliveries": 1,
+  "note": "Short controlled run with real upstream traffic; not a sustained availability claim."
+}

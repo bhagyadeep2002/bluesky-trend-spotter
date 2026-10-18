@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import tempfile
+import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -17,6 +18,7 @@ from .api import create_app
 from .config import Settings
 from .database import Database
 from .detection import detect, floor_window
+from .maintenance import maintain
 from .metrics import Metrics
 from .models import Assignment, DetectionRun, Post, PostEventRecord, Topic, TopicTerm, WindowMetric
 from .service import Consumer, log_event
@@ -76,8 +78,12 @@ def application(settings: Settings, *, demo: bool = False, stream: bool = True):
 
         async def detector():
             demo_boundary = floor_window(datetime.now(UTC), settings.window_minutes)
+            last_maintenance = -3600.0
             while not stop.is_set():
                 try:
+                    if time.monotonic() - last_maintenance >= 3600:
+                        await asyncio.to_thread(maintain, database, settings)
+                        last_maintenance = time.monotonic()
                     boundary = floor_window(datetime.now(UTC), settings.window_minutes)
                     if demo and boundary != demo_boundary:
                         await seed_demo(database, settings, metrics)
@@ -101,6 +107,8 @@ def application(settings: Settings, *, demo: bool = False, stream: bool = True):
 
             def ingestion_done(task):
                 if not task.cancelled() and task.exception():
+                    if metrics.connection_state != "failed":
+                        metrics.errors += 1
                     metrics.connection_state = "failed"
                     metrics.last_error = type(task.exception()).__name__
                     log_event("ingestion_requires_restart", error_type=metrics.last_error)
@@ -113,6 +121,7 @@ def application(settings: Settings, *, demo: bool = False, stream: bool = True):
             await asyncio.gather(
                 detection_task, *([ingest_task] if ingest_task else []), return_exceptions=True
             )
+            log_event("application_stopped", **metrics.snapshot())
             database.dispose()
 
     return create_app(database, settings, metrics, demo=demo, lifespan=lifespan)

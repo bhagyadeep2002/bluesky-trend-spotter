@@ -30,6 +30,9 @@ async def test_api_ranking_pagination_validation_and_deleted_exclusion(database)
     ) as client:
         assert (await client.get("/healthz")).status_code == 200
         assert (await client.get("/readyz")).status_code == 200
+        metrics_text = (await client.get("/metrics")).text
+        assert "bluesky_events_received_total" in metrics_text
+        assert "bluesky_connected 0" in metrics_text
         response = await client.get("/api/v1/topics/trending")
         assert response.status_code == 200
         assert response.json()["demo"]

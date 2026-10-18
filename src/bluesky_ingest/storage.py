@@ -19,6 +19,8 @@ class RawWriter:
         max_bytes: int,
         rotate_seconds: float,
         clock: Callable[[], float] = time.monotonic,
+        retention_seconds: float = 86_400,
+        budget_bytes: int = 1_073_741_824,
     ):
         self.directory = directory
         self.max_bytes = max_bytes
@@ -27,6 +29,8 @@ class RawWriter:
         self.file: BinaryIO | None = None
         self.size = 0
         self.opened_at = 0.0
+        self.retention_seconds = retention_seconds
+        self.budget_bytes = budget_bytes
 
     def append(self, envelope: dict) -> str:
         line = (json.dumps(envelope, ensure_ascii=True, separators=(",", ":")) + "\n").encode()
@@ -38,6 +42,7 @@ class RawWriter:
         ):
             self.close()
             self.directory.mkdir(parents=True, exist_ok=True)
+            self.prune(max(self.max_bytes, len(line)))
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
             self.file = (self.directory / f"events-{stamp}-{uuid4().hex}.jsonl").open("xb")
             self.size, self.opened_at = 0, now
@@ -53,6 +58,19 @@ class RawWriter:
         os.fsync(self.file.fileno())
         self.size += len(line)
         return reference
+
+    def prune(self, reserve: int = 0) -> None:
+        if reserve > self.budget_bytes:
+            raise OSError("raw envelope exceeds disk budget")
+        files = sorted(self.directory.glob("events-*.jsonl"), key=lambda path: path.stat().st_mtime)
+        total = sum(path.stat().st_size for path in files)
+        for path in files:
+            if (
+                time.time() - path.stat().st_mtime > self.retention_seconds
+                or total + reserve > self.budget_bytes
+            ):
+                total -= path.stat().st_size
+                path.unlink()
 
     def close(self) -> None:
         if self.file is not None:

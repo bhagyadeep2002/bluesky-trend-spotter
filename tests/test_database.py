@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,8 +10,9 @@ from sqlalchemy.orm import Session
 
 from bluesky_ingest.config import Settings
 from bluesky_ingest.events import parse_event
-from bluesky_ingest.models import Post, PostEventRecord
+from bluesky_ingest.models import Assignment, Post, PostEventRecord, Topic
 from bluesky_ingest.service import Consumer
+from bluesky_ingest.synthetic import make_event
 
 FIXTURE = Path("tests/fixtures/events.jsonl")
 
@@ -78,3 +80,28 @@ async def test_exhausted_database_retries_leave_raw_for_recovery(tmp_path):
     assert not (tmp_path / "checkpoint.json").exists()
     assert len(list(tmp_path.glob("events-*.jsonl"))) == 1
     assert consumer.metrics.connection_state == "failed"
+
+
+def test_concurrent_duplicate_delivery_is_idempotent(database):
+    raw = FIXTURE.read_text().splitlines()[0]
+    event = parse_event(raw)
+    now = datetime.now(UTC).isoformat()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: database.apply(event, now), range(2)))
+    assert sorted(results) == [False, True]
+    with Session(database.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PostEventRecord)) == 1
+
+
+def test_update_reassigns_terms_without_creating_extra_activity(database):
+    now = datetime.now(UTC)
+    before = parse_event(make_event("#original", now, "same"))
+    from datetime import timedelta
+
+    after = parse_event(make_event("#replacement", now + timedelta(seconds=1), "same", "update"))
+    database.apply(before, now.isoformat())
+    database.apply(after, now.isoformat())
+    with Session(database.engine) as session:
+        keys = list(session.scalars(select(Topic.normalized_key).join(Assignment)))
+        assert keys == ["hashtag:replacement"]
+        assert session.scalar(select(func.count()).select_from(Post)) == 1

@@ -53,7 +53,7 @@ class PostEventRecord(Base):
 
 class Topic(Base):
     __tablename__ = "topic_candidates"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     label: Mapped[str] = mapped_column(Text)
     normalized_key: Mapped[str] = mapped_column(Text, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -85,7 +85,7 @@ class Assignment(Base):
 
 class WindowMetric(Base):
     __tablename__ = "topic_window_metrics"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     topic_id: Mapped[int] = mapped_column(ForeignKey("topic_candidates.id", ondelete="CASCADE"))
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     window_minutes: Mapped[int] = mapped_column(Integer)
@@ -105,7 +105,7 @@ class WindowMetric(Base):
 
 class DetectionRun(Base):
     __tablename__ = "detection_runs"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(16))

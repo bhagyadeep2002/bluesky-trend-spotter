@@ -248,3 +248,15 @@ background tasks while serving the dashboard. `--api-only` disables live receipt
 The local HTML/CSS/JS dashboard has no frontend build or external asset service.
 Optional UI checks: `npm ci`, `npx playwright install chromium`, then
 `npm run test:ui` while the demo is running. See docs/UI_QA.md.
+
+## Operations and measurement
+
+Docker Compose now builds and runs the full app with PostgreSQL 18. A separate
+validation stack passed live receipt, readiness, a controlled database outage,
+bounded-queue recovery, graceful draining and checkpoint replay after restart.
+Raw retention defaults to 24h with a 1GiB budget, enforced at rotation/startup.
+The full runtime expires normalized text after 48h (hourly maintenance), retains
+metrics/runs for 7 days and preserves minimal tombstones/deduplication metadata.
+`/metrics` exposes Prometheus text metrics; latency percentiles use a bounded
+rolling sample. Reproducible benchmark and smoke scripts are in tools/.
+Generated PostgreSQL identifiers and sequences use bigint in migration 0002.

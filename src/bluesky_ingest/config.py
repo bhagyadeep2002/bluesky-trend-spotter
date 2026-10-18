@@ -34,6 +34,9 @@ class Settings:
     candidate_min_frequency: int = 3
     detect_interval_seconds: float = 15
     analysis_max_posts: int = 100_000
+    raw_retention_hours: float = 24
+    raw_budget_bytes: int = 1_073_741_824
+    post_retention_hours: float = 48
 
     def __post_init__(self) -> None:
         url = urlsplit(self.jetstream_url)
@@ -59,6 +62,9 @@ class Settings:
             "candidate_min_frequency",
             "detect_interval_seconds",
             "analysis_max_posts",
+            "raw_retention_hours",
+            "raw_budget_bytes",
+            "post_retention_hours",
         ):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
@@ -67,6 +73,10 @@ class Settings:
             raise ValueError("BACKOFF_MAX must be at least BACKOFF_INITIAL")
         if self.metrics_port > 65535:
             raise ValueError("METRICS_PORT must be at most 65535")
+        if self.raw_budget_bytes < self.raw_max_bytes:
+            raise ValueError("RAW_BUDGET_BYTES must be at least RAW_MAX_BYTES")
+        if self.post_retention_hours * 60 <= self.window_minutes * (2 * self.baseline_windows + 2):
+            raise ValueError("POST_RETENTION_HOURS must exceed the analysis horizon")
 
     @classmethod
     def from_env(cls) -> Settings:

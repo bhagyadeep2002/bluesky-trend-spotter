@@ -38,7 +38,7 @@ class Database:
         with self.engine.connect() as connection:
             connection.execute(text("SELECT 1 FROM posts LIMIT 1"))
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            return version == "0001"
+            return version == "0002"
 
     def migrate(self) -> None:
         from alembic import command

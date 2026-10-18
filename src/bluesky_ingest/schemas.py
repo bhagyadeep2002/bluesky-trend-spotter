@@ -95,6 +95,9 @@ class PipelineResponse(BaseModel):
     last_detection_at: str | None
     detection_error: str | None
     topics_evaluated: int
+    latency_p50_seconds: float | None
+    latency_p95_seconds: float | None
+    latency_sample_count: int
     mode: str
 
 

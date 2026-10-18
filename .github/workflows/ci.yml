@@ -1,0 +1,40 @@
+name: Offline and PostgreSQL checks
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: bluesky
+          POSTGRES_PASSWORD: local-ci-only
+          POSTGRES_DB: bluesky_test
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U bluesky -d bluesky_test" --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://bluesky:local-ci-only@127.0.0.1:5432/bluesky_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.6"
+          python-version: "3.14"
+      - run: uv sync --locked
+      - run: uv run ruff check src tests migrations tools
+      - run: uv run ruff format --check src tests migrations tools
+      - run: uv run pytest -q
+      - run: docker compose config --quiet
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci && npx playwright install --with-deps chromium
+      - name: Dashboard browser checks
+        run: |
+          uv run bluesky-serve --demo > /tmp/bluesky-ui.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8000/readyz; then break; fi
+            sleep 1
+          done
+          npm run test:ui

@@ -70,7 +70,13 @@ class Consumer:
         self.writer = (
             writer
             if writer is not None
-            else RawWriter(settings.raw_dir, settings.raw_max_bytes, settings.raw_rotate_seconds)
+            else RawWriter(
+                settings.raw_dir,
+                settings.raw_max_bytes,
+                settings.raw_rotate_seconds,
+                retention_seconds=settings.raw_retention_hours * 3600,
+                budget_bytes=settings.raw_budget_bytes,
+            )
         )
         self.connector = connector or self._connect
         self.random_value = random_value
@@ -214,6 +220,8 @@ class Consumer:
                 self.metrics.processing_lag_seconds = max(
                     0, (now - datetime.fromisoformat(ingested_at)).total_seconds()
                 )
+                self.metrics.processing_latencies.append(self.metrics.processing_lag_seconds)
+                self.metrics.processing_latencies[:] = self.metrics.processing_latencies[-1024:]
                 if post:
                     self.metrics.valid_post_events += 1
                     if post.source_time:

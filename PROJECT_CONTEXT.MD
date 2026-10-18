@@ -27,7 +27,14 @@ testing each stage before advancing. Preserve the original printing demo.
    FastAPI. --demo uses separate SQLite synthetic data; --api-only serves existing
    records. Responsive local HTML/CSS/JS overview, topic chart/evidence, search,
    refresh and error states. No frontend build or external assets needed.
-7. Next: Compose, retention/operations, failure benchmarks and final documentation.
+7. Operations: complete. Compose builds/starts
+   PostgreSQL 18 and app with health checks. Raw rotation now enforces 24h TTL
+   and 1GiB budget. Hourly normalized maintenance clears text after 48h and old
+   metrics/runs after 7 days; minimal tombstones and dedup metadata remain.
+   Prometheus metrics and bounded latency samples are exposed. Migration 0002
+   widens generated PostgreSQL identifiers/sequences to bigint; SQLite rowids
+   already support 64 bits. CI workflow and reproducible benchmark/smoke tools
+   are included. Next: finalize documentation and commit the acceptance evidence.
 
 ## Architecture and commands
 
@@ -106,3 +113,23 @@ not for running the app. See docs/UI_QA.md.
 Commands: uv run bluesky-serve --demo (localhost:8000); npm ci;
 npx playwright install chromium; npm run test:ui with the demo running.
 A local demo process is running on port 8000 for validation.
+
+Operations validation: 72 backend tests and 32 original subtests passed, including
+actual PostgreSQL migration upgrade/downgrade and metadata drift checks, concurrent
+duplicate delivery, changed-term updates, analysis-budget failures, retention and
+metrics. Docker live smoke passed: readiness 503 during a deliberate DB outage,
+queue stayed bounded at 256, recovery occurred after DB restart, accepted events
+drained at shutdown, and inclusive checkpoint restart observed one duplicate.
+Uvicorn intentionally re-raises SIGTERM after cleanup; Docker exit 143 is expected
+and is accompanied by application_stopped metrics with queue depth 0.
+Benchmark tools use actual local WebSockets plus SQLite/PostgreSQL and measure
+CPU/RSS, latency, throughput, duplicate rate, raw disk growth and recovery.
+
+Final operations acceptance: 72 tests passed with PostgreSQL enabled; Ruff check
+and formatting, uv lock consistency, installed dependency compatibility and
+Compose configuration passed. A populated Docker database upgraded from 0001 to
+0002 and the live outage/restart/shutdown smoke passed again. Recorded evidence
+is docs/compose-smoke.json. Final synthetic benchmark JSONs include measured
+raw plus normalized relation growth, latency, throughput and CPU/RSS. These are
+short fixture measurements, not sustained production capacity. Docker validation
+services/volumes will be removed after checks; the separate local demo remains.

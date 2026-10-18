@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -77,3 +78,16 @@ def test_updates_and_deletes_remove_assignments_and_scores(database):
         assert session.scalar(select(func.count()).select_from(Assignment)) == 0
         assert session.scalar(select(func.count()).select_from(WindowMetric)) == 0
         assert all(post.text is None for post in session.scalars(select(Post)))
+
+
+def test_analysis_budget_failure_is_recorded(database):
+    now = datetime(2026, 10, 18, 12, 5, tzinfo=UTC)
+    for i in range(2):
+        database.apply(
+            parse_event(make_event("#aurora", now - timedelta(minutes=2), str(i))), now.isoformat()
+        )
+    with pytest.raises(RuntimeError, match="budget exceeded"):
+        detect(database, Settings(analysis_max_posts=1), now)
+    with Session(database.engine) as session:
+        run = session.scalar(select(DetectionRun))
+        assert run.status == "failed" and run.error_summary == "RuntimeError"

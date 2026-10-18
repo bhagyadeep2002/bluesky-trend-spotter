@@ -5,7 +5,7 @@ const number = (n, decimals = 0) => Number(n).toLocaleString(undefined, {maximum
 const time = (s) => s ? new Date(s).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "Not yet";
 const stamp = (s) => s ? new Date(s).toLocaleString() : "Not yet";
 const endpoint = async (path) => { const response = await fetch(path, {cache: "no-store"}); if (!response.ok) throw new Error(response.status === 404 ? "This topic could not be found." : "Data is temporarily unavailable. Check pipeline readiness and try Refresh."); return response.json(); };
-let busy = false, offset = 0, total = 0;
+let busy = false, offset = 0, total = 0, currentSearch = "";
 const topicId = location.pathname.split("/")[2];
 function showError(error) { $("error").textContent = error.message; $("error").hidden = false; }
 function demoMode(enabled) { $("demo-banner").hidden = !enabled; }
@@ -51,6 +51,7 @@ async function overview() {
     cell.append(link, node("span", metric.persistence, "topic-sub")); row.append(cell, node("td", number(metric.post_count)), node("td", number(metric.baseline_expected_count, 1)));
     const growth = node("td"); growth.append(node("span", `${number(metric.rate_ratio, 1)}×`, "growth")); row.append(growth, node("td", number(metric.spike_score, 1))); table.append(row);
   });
+  if (currentSearch) await searchPosts(currentSearch);
 }
 function renderChart(items) {
   const container = $("timeline"); container.replaceChildren(); $("timeline-table").replaceChildren();
@@ -92,16 +93,31 @@ async function detail() {
     const components = $("score-components"); components.replaceChildren();
     const c = m.score_components;
     [["Spike score", number(m.spike_score, 1)], ["Smoothing α", c.alpha], ["Baseline floor", c.baseline_floor], ["Minimum volume", c.min_current_count], ["Minimum growth", `${c.min_rate_ratio}×`], ["Consecutive windows", c.consecutive_spike_windows || 0]].forEach(([label, value]) => { const row = node("div"); row.append(node("dt", label), node("dd", String(value))); components.append(row); });
-  } else { $("explanation").textContent = "Not enough completed-window evidence for a score yet."; }
+  } else {
+    $("explanation").textContent = "Not enough completed-window evidence for a score yet.";
+    ["current-count", "baseline", "growth", "persistence"].forEach(id => $(id).textContent = "—");
+    $("score-components").replaceChildren(); $("sample-label").textContent = "No current scored sample";
+    $("increase").textContent = "Absolute increase: —"; $("updated").textContent = "No current detection";
+  }
   renderChart(timeline.items); await evidence();
 }
 async function refresh() {
   if (busy) return; busy = true; $("refresh").disabled = true;
   try { await Promise.all([pipeline(), document.body.dataset.page === "topic" ? detail() : overview()]); $("error").hidden = true; }
-  catch (error) { showError(error); }
+  catch (error) { showError(error); if (error.message.includes("could not be found") && $("topic-title")) $("topic-title").textContent = "Topic unavailable"; }
   finally { busy = false; $("refresh").disabled = false; }
 }
 $("refresh").addEventListener("click", refresh);
 if ($("next")) { $("next").addEventListener("click", async () => { offset += 10; try { await evidence(); } catch (error) { showError(error); } }); $("previous").addEventListener("click", async () => { offset = Math.max(0, offset - 10); try { await evidence(); } catch (error) { showError(error); } }); }
-if ($("search-form")) $("search-form").addEventListener("submit", async (event) => { event.preventDefault(); const q = $("search").value.trim(); if (!q) return; $("search-results").textContent = "Searching…"; try { const data = await endpoint(`/api/v1/search?q=${encodeURIComponent(q)}`); renderPosts(data.items, $("search-results")); $("search-results").prepend(node("p", `${data.total} available matches · showing up to 20`, "muted")); } catch (error) { $("search-results").textContent = error.message; } });
+async function searchPosts(q) {
+  const data = await endpoint(`/api/v1/search?q=${encodeURIComponent(q)}`);
+  renderPosts(data.items, $("search-results"));
+  $("search-results").prepend(node("p", `${data.total} available matches · showing up to 20`, "muted"));
+}
+if ($("search-form")) $("search-form").addEventListener("submit", async (event) => {
+  event.preventDefault(); const q = $("search").value.trim(); if (!q) return;
+  currentSearch = q; $("search-results").textContent = "Searching…";
+  try { await searchPosts(q); } catch (error) { $("search-results").textContent = error.message; }
+});
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 refresh(); setInterval(() => { if (!document.hidden) refresh(); }, 15000);
