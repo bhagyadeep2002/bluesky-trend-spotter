@@ -154,8 +154,12 @@ volume and detector budgets require measurement. A failed disk/forced crash may
 leave a partial raw tail or lose unpersisted messages. No exactly-once capture,
 multi-process coordination, auth, multi-node availability or production SLO claimed.
 
-Next recommended work: longer soak tests and a broader labeled quality evaluation,
-then tune retention/window budgets from measured demand. MVP work is complete.
+Next task: address measured live detector/ingestion contention before longer soak
+tests. Reduce full-horizon metric rewrites, shorten writer-lock duration and move
+CPU-heavy detection out of the ingestion process where appropriate; validate
+concurrent updates/deletes and sustained backlog recovery before claiming gains.
+Then broaden labeled quality evaluation and tune measured retention/horizon budgets.
+MVP functionality is complete; live performance needs this follow-up.
 
 ## Workspace/session state
 
@@ -188,3 +192,36 @@ Historical benchmark figures above were not rerun or represented as performance
 measurements of this update. The owned native PostgreSQL test cluster remains at
 /private/tmp/bluesky-project-pg on port 55432 and is stopped after final checks.
 The user's live Compose PostgreSQL remains running; do not remove its volumes.
+
+## Live lag investigation (2026-10-18)
+
+The user asked why processing lag increased. Read-only inspection of the running
+Compose app found a concrete throughput bottleneck, without clearing data or
+changing runtime configuration. At the sample: 62,992 posts, 81,841 topic candidates,
+281,575 assignments and 200,057 window metrics. The latest completed detector run
+evaluated 15,389 topics and took 32.302 seconds; earlier recent runs took 28–29
+seconds. PostgreSQL showed ingestion actively waiting on advisory lock 847019 while
+the detector transaction was idle waiting for application work. The app container
+used about 100% of one CPU and 682 MiB RAM; PostgreSQL used about 2% CPU at that
+instant. This identifies application-side full-horizon aggregation/metric rebuilding
+under the shared writer lock as the primary observed blockage, rather than proving
+a disk or database capacity limit.
+
+The pipeline sample reported queue 256/256, 35.2 persisted deliveries/second since
+restart, processing lag 2.536 seconds, source lag 350.619 seconds and three reconnects.
+Those are point-in-time/cumulative metrics, not sustained capacity measurements;
+received rate is backpressured, so it cannot establish the upstream arrival rate.
+Processing lag is receipt-to-persistence for the last completed event and updates
+only on successful persistence; it excludes time already spent upstream/in socket
+buffers. Source lag measures source timestamp age for that event. Neither field
+alone describes every queued event's current delay.
+
+Detector currently deletes/rebuilds recent metrics for every eligible topic each
+cycle while holding the same advisory lock used by individual event writes.
+Candidate volume grows before six-hour expiry can help; the six-hour setting bounds
+retention, not per-cycle work or ingest latency. New minute maintenance shares that
+lock too, but this sample directly observed a detector blockage. The existing short
+594-event benchmark did not establish full-network sustained performance. No code
+fix or new performance guarantee was made during this diagnostic question. Project
+context was updated and committed; no tests were needed for this documentation-only
+change. The live DB, app and volumes were preserved.
