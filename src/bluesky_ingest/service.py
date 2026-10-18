@@ -14,6 +14,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from .config import Settings
+from .checkpoint import Checkpoint
 from .events import POST_COLLECTION, MalformedEvent, parse_event
 from .metrics import Metrics
 from .storage import RawWriter, raw_fields, replay_messages
@@ -63,6 +64,8 @@ class Consumer:
         self.connector = connector or self._connect
         self.random_value = random_value
         self.cursor: int | None = None
+        self.checkpoint = Checkpoint(settings.raw_dir, settings.jetstream_url)
+        self.replaying = False
 
     def _connect(self, url: str):
         return connect(url, max_size=self.settings.max_message_bytes, max_queue=16,
@@ -164,6 +167,8 @@ class Consumer:
                     if post.source_time:
                         self.metrics.source_lag_seconds = max(0, (now - datetime.fromisoformat(post.source_time)).total_seconds())
                     if post.cursor is not None:
+                        if not self.replaying:
+                            await asyncio.to_thread(self.checkpoint.save, max(self.cursor or 0, post.cursor))
                         self.cursor = max(self.cursor or 0, post.cursor)
                 elif disposition == "malformed":
                     self.metrics.malformed_events += 1
@@ -175,6 +180,9 @@ class Consumer:
     async def run(self, stop: asyncio.Event, *, replay: Path | None = None, limit: int = 0) -> None:
         if limit < 0:
             raise ValueError("limit must be nonnegative")
+        self.replaying = replay is not None
+        if not self.replaying:
+            self.cursor = self.checkpoint.load()
         worker = asyncio.create_task(self._persist())
         producer = asyncio.create_task(self._produce(stop, replay, limit))
         try:

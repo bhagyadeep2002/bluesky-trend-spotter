@@ -12,5 +12,12 @@ dependencies = ["websockets==17.2", "fastapi==0.143.3", "uvicorn==0.54.0"]
 [project.scripts]
 bluesky-ingest = "bluesky_ingest.cli:main"
 
+[dependency-groups]
+dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "httpx==0.28.1", "ruff==0.17.1", "psutil==7.2.2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
 [tool.setuptools.packages.find]
 where = ["src"]

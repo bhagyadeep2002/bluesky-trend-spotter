@@ -171,10 +171,11 @@ retention. This consumer does not capture the entire network. It provides local
 raw ingestion only: no PostgreSQL, topic detector, current-post API, dashboard,
 or database readiness endpoint yet.
 
-There is no persisted restart checkpoint: a new process starts live unless a
-cursor is explicitly included in `JETSTREAM_URL`. Reconnect recovery is limited
-to upstream cursor lookback. Add durable restart checkpoints next, then
-idempotent current-post storage and deletion handling.
+A durable `RAW_DIR/checkpoint.json` resumes from the last acknowledged supported
+post cursor on restart. It is source-specific and replaced atomically after
+fsync. Corrupt or mismatched checkpoints fail closed. Offline replay never
+overwrites the live cursor. Resume is inclusive and limited by upstream lookback;
+raw duplicate deliveries remain possible. Next: idempotent current-post storage.
 
 Raw logs can contain text from posts subsequently deleted. This milestone has
 no raw-log redaction or automatic retention/purge policy and no current-state
@@ -188,26 +189,16 @@ directory; startup crash repair and multi-process coordination are future work.
 
 ## Project context and Git
 
-`AGENTS.MD` requires updating `PROJECT_CONTEXT.MD` whenever a change makes it
-outdated, maintaining Git history, and committing completed changes.
+`AGENTS.MD` requires keeping `PROJECT_CONTEXT.MD` current and committing completed
+changes. The user has now authorized completion of the full MVP in tested stages.
+The workspace now has a normal `.git` repository restored from the initial
+milestone's history. Use ordinary `git status` and `git log` commands.
 
-This session's sandbox blocked creation of workspace `.git`. Committed history
-is stored in `/private/tmp/bluesky-firehose-m1.git` with this directory as its
-working tree; `milestone1.bundle` is the portable backup in the workspace.
-Use this command in the current environment:
-
-```sh
-git --git-dir=/private/tmp/bluesky-firehose-m1.git status
-```
-
-Restore a normal repository in a writable destination (outside this protected
-workspace, or after its Git permissions are fixed):
+The original `milestone1.bundle` and temporary Git repository are historical
+fallbacks. Generated captures, bundles, credentials and caches remain ignored.
+The current reproducible development dependency lock is `uv.lock`:
 
 ```sh
-git clone /absolute/path/to/bluesky-firehose/milestone1.bundle bluesky-firehose-restored
+uv sync --locked
+uv run pytest -q
 ```
-
-Raw captures, credentials, the virtual environment, caches, and generated bundles
-are excluded from commits. A Git bundle cannot contain itself; regenerate it
-after future commits with `git --git-dir=/private/tmp/bluesky-firehose-m1.git
-bundle create milestone1.bundle --all`.
